@@ -1,16 +1,17 @@
 <launch>
 
+   <node name="rvizvisualisation" pkg="rviz" type="rviz" output="log" args="-d $(find msckf_vio)/rviz/rviz_50t_config.rviz" />
+
   <arg name="fixed_frame_id" default="world"/>
   <arg name="calibration_file"
     default="$(find msckf_vio)/config/camchain-imucam-50t3.yaml"/>
 
   <!-- Image Processor Nodelet  -->
-  <include file="$(find msckf_vio)/launch/image_processor_50t3.launch">
+   <include file="$(find msckf_vio)/launch/image_processor_50t3.launch">
     <arg name="calibration_file" value="$(arg calibration_file)"/>
   </include>
 
   <!-- Msckf Vio Nodelet  -->
-
     <node pkg="nodelet" type="nodelet" name="MsckfVio"
       args='standalone msckf_vio/MsckfVioNodelet'
       output="screen">
@@ -19,7 +20,7 @@
       <rosparam command="load" file="$(arg calibration_file)"/>
 
       <param name="publish_tf" value="true"/>
-      <param name="frame_rate" value="20"/>
+      <param name="frame_rate" value="30"/>
       <param name="fixed_frame_id" value="$(arg fixed_frame_id)"/>
       <param name="child_frame_id" value="odom"/>
       <param name="max_cam_state_size" value="20"/>
@@ -55,6 +56,5 @@
       
 
     </node>
-
 
 </launch>
