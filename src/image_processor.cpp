@@ -11,6 +11,7 @@
 #include <Eigen/Dense>
 
 #include <sensor_msgs/image_encodings.h>
+#include <sensor_msgs/PointCloud.h>
 #include <random_numbers/random_numbers.h>
 
 #include <msckf_vio/CameraMeasurement.h>
@@ -201,10 +202,10 @@ bool ImageProcessor::loadParameters() {
 }
 
 bool ImageProcessor::createRosIO() {
-  feature_pub = nh.advertise<CameraMeasurement>(
-      "features", 3);
-  tracking_info_pub = nh.advertise<TrackingInfo>(
-      "tracking_info", 1);
+  feature_pub = nh.advertise<CameraMeasurement>("features", 3);
+  feature2_pub = nh.advertise<sensor_msgs::PointCloud>("vins_feature", 1000);
+  tracking_info_pub = nh.advertise<TrackingInfo>("tracking_info", 1);
+  
   image_transport::ImageTransport it(nh);
   debug_stereo_pub = it.advertise("debug_stereo_image", 1);
 
@@ -212,23 +213,26 @@ bool ImageProcessor::createRosIO() {
   cam1_img_sub.subscribe(nh, "cam1_image", 10);
   stereo_sub.connectInput(cam0_img_sub, cam1_img_sub);
   stereo_sub.registerCallback(&ImageProcessor::stereoCallback, this);
-  imu_sub = nh.subscribe("imu", 50,
-      &ImageProcessor::imuCallback, this);
+  imu_sub = nh.subscribe("imu", 50,&ImageProcessor::imuCallback, this);
 
   return true;
 }
 
 bool ImageProcessor::initialize() {
-  if (!loadParameters()) return false;
+  if (!loadParameters())
+    return false;
   ROS_INFO("Finish loading ROS parameters...");
 
   // Create feature detector.
-  detector_ptr = FastFeatureDetector::create(
-      processor_config.fast_threshold);
+  detector_ptr = FastFeatureDetector::create(processor_config.fast_threshold);
 
-  if (!createRosIO()) return false;
+  if (!createRosIO())
+    return false;
   ROS_INFO("Finish creating ROS IO...");
 
+  const string calib_file = "/home/sst/catkin_ws/src/VINS-Mono-master/config/visensor_50t#3/fisheye_left.yaml";
+  m_camera = camodocal::CameraFactory::instance()->generateCameraFromYamlFile(calib_file);
+  
   return true;
 }
 
@@ -1299,6 +1303,37 @@ void ImageProcessor::publish() {
   tracking_info_msg_ptr->after_ransac = after_ransac;
   tracking_info_pub.publish(tracking_info_msg_ptr);
 
+  // Publish vins features
+  
+  
+  sensor_msgs::PointCloudPtr feature_points(new sensor_msgs::PointCloud);
+  sensor_msgs::ChannelFloat32 id_of_point;
+  sensor_msgs::ChannelFloat32 u_of_point;
+  sensor_msgs::ChannelFloat32 v_of_point;
+
+  feature_points->header.stamp = cam0_curr_img_ptr->header.stamp;
+  for (int i = 0; i < curr_ids.size(); ++i) {
+    int id = curr_ids[i];
+
+    Eigen::Vector2d a(curr_cam0_points[i].x, curr_cam0_points[i].y);
+    Eigen::Vector3d b;
+    m_camera->liftProjective(a, b);
+	
+    geometry_msgs::Point32 p;
+    p.x = b.x() / b.z();
+    p.y = b.y() / b.z();
+    p.z = 1;
+
+    feature_points->points.push_back(p);
+    id_of_point.values.push_back(id);
+    u_of_point.values.push_back(curr_cam0_points[i].x);
+    v_of_point.values.push_back(curr_cam0_points[i].y);
+  }
+  feature_points->channels.push_back(id_of_point);
+  feature_points->channels.push_back(u_of_point);
+  feature_points->channels.push_back(v_of_point);
+  feature2_pub.publish(feature_points);
+  
   return;
 }
 
