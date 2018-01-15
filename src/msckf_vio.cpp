@@ -26,8 +26,6 @@
 #include <msckf_vio/math_utils.hpp>
 #include <msckf_vio/utils.h>
 
-#include "tic_toc.h"
-
 using namespace std;
 using namespace Eigen;
 
@@ -179,15 +177,21 @@ bool MsckfVio::loadParameters() {
 
 bool MsckfVio::createRosIO() {
   odom_pub = nh.advertise<nav_msgs::Odometry>("odom", 10);
+  feature_pub = nh.advertise<sensor_msgs::PointCloud2>(
+      "feature_point_cloud", 10);
+
   path_pub = nh.advertise<nav_msgs::Path>("path", 1000);
-  feature_pub = nh.advertise<sensor_msgs::PointCloud>("feature_point_cloud", 10);
 
-  reset_srv = nh.advertiseService("reset",&MsckfVio::resetCallback, this);
+  reset_srv = nh.advertiseService("reset",
+      &MsckfVio::resetCallback, this);
 
-  imu_sub = nh.subscribe("imu", 100,&MsckfVio::imuCallback, this);
-  feature_sub = nh.subscribe("features", 40,&MsckfVio::featureCallback, this);
+  imu_sub = nh.subscribe("imu", 100,
+      &MsckfVio::imuCallback, this);
+  feature_sub = nh.subscribe("features", 40,
+      &MsckfVio::featureCallback, this);
 
-  mocap_odom_sub = nh.subscribe("mocap_odom", 10,&MsckfVio::mocapOdomCallback, this);
+  mocap_odom_sub = nh.subscribe("mocap_odom", 10,
+      &MsckfVio::mocapOdomCallback, this);
   mocap_odom_pub = nh.advertise<nav_msgs::Odometry>("gt_odom", 1);
 
   return true;
@@ -198,21 +202,26 @@ bool MsckfVio::initialize() {
   ROS_INFO("Finish loading ROS parameters...");
 
   // Initialize state server
-  state_server.continuous_noise_cov = Matrix<double, 12, 12>::Zero();
-  state_server.continuous_noise_cov.block<3, 3>(0, 0) = Matrix3d::Identity()*IMUState::gyro_noise;
-  state_server.continuous_noise_cov.block<3, 3>(3, 3) = Matrix3d::Identity()*IMUState::gyro_bias_noise;
-  state_server.continuous_noise_cov.block<3, 3>(6, 6) = Matrix3d::Identity()*IMUState::acc_noise;
-  state_server.continuous_noise_cov.block<3, 3>(9, 9) = Matrix3d::Identity()*IMUState::acc_bias_noise;
+  state_server.continuous_noise_cov =
+    Matrix<double, 12, 12>::Zero();
+  state_server.continuous_noise_cov.block<3, 3>(0, 0) =
+    Matrix3d::Identity()*IMUState::gyro_noise;
+  state_server.continuous_noise_cov.block<3, 3>(3, 3) =
+    Matrix3d::Identity()*IMUState::gyro_bias_noise;
+  state_server.continuous_noise_cov.block<3, 3>(6, 6) =
+    Matrix3d::Identity()*IMUState::acc_noise;
+  state_server.continuous_noise_cov.block<3, 3>(9, 9) =
+    Matrix3d::Identity()*IMUState::acc_bias_noise;
 
   // Initialize the chi squared test table with confidence
   // level 0.95.
   for (int i = 1; i < 100; ++i) {
     boost::math::chi_squared chi_squared_dist(i);
-    chi_squared_test_table[i] = boost::math::quantile(chi_squared_dist, 0.05);
+    chi_squared_test_table[i] =
+      boost::math::quantile(chi_squared_dist, 0.05);
   }
 
-  if (!createRosIO())
-    return false;
+  if (!createRosIO()) return false;
   ROS_INFO("Finish creating ROS IO...");
 
   return true;
@@ -228,8 +237,7 @@ void MsckfVio::imuCallback(
   imu_msg_buffer.push_back(*msg);
 
   if (!is_gravity_set) {
-    if (imu_msg_buffer.size() < 200)
-      return;
+    if (imu_msg_buffer.size() < 200) return;
     //if (imu_msg_buffer.size() < 10) return;
     initializeGravityAndBias();
     is_gravity_set = true;
@@ -350,11 +358,9 @@ bool MsckfVio::resetCallback(
   return true;
 }
 
-void MsckfVio::featureCallback(const CameraMeasurementConstPtr& msg)
-{
-  TicToc t_r;
-  
-  
+void MsckfVio::featureCallback(
+    const CameraMeasurementConstPtr& msg) {
+
   // Return if the gravity vector has not been set.
   if (!is_gravity_set) return;
 
@@ -374,61 +380,63 @@ void MsckfVio::featureCallback(const CameraMeasurementConstPtr& msg)
   // that are received before the image msg.
   ros::Time start_time = ros::Time::now();
   batchImuProcessing(msg->header.stamp.toSec());
-  double imu_processing_time = (ros::Time::now()-start_time).toSec();
+  double imu_processing_time = (
+      ros::Time::now()-start_time).toSec();
 
   // Augment the state vector.
   start_time = ros::Time::now();
   stateAugmentation(msg->header.stamp.toSec());
-  double state_augmentation_time = (ros::Time::now()-start_time).toSec();
+  double state_augmentation_time = (
+      ros::Time::now()-start_time).toSec();
 
   // Add new observations for existing features or new
   // features in the map server.
   start_time = ros::Time::now();
   addFeatureObservations(msg);
-  double add_observations_time = (ros::Time::now()-start_time).toSec();
+  double add_observations_time = (
+      ros::Time::now()-start_time).toSec();
 
   // Perform measurement update if necessary.
   start_time = ros::Time::now();
   removeLostFeatures();
-  double remove_lost_features_time = (ros::Time::now()-start_time).toSec();
+  double remove_lost_features_time = (
+      ros::Time::now()-start_time).toSec();
 
   start_time = ros::Time::now();
   pruneCamStateBuffer();
-  double prune_cam_states_time = (ros::Time::now()-start_time).toSec();
+  double prune_cam_states_time = (
+      ros::Time::now()-start_time).toSec();
 
   // Publish the odometry.
   start_time = ros::Time::now();
   publish(msg->header.stamp);
-  double publish_time = (ros::Time::now()-start_time).toSec();
+  double publish_time = (
+      ros::Time::now()-start_time).toSec();
 
   // Reset the system if necessary.
   onlineReset();
 
   double processing_end_time = ros::Time::now().toSec();
-  double processing_time = processing_end_time - processing_start_time;
+  double processing_time =
+    processing_end_time - processing_start_time;
   if (processing_time > 1.0/frame_rate) {
     ++critical_time_cntr;
-    ROS_INFO("Total processing time %f/%d...\n",processing_time, critical_time_cntr);
-    //printf("IMU processing time: %f/%f\n",imu_processing_time, imu_processing_time/processing_time);
-    //printf("State augmentation time: %f/%f\n",state_augmentation_time, state_augmentation_time/processing_time);
-    //printf("Add observations time: %f/%f\n",add_observations_time, add_observations_time/processing_time);
-    //printf("Remove lost features time: %f/%f\n",remove_lost_features_time, remove_lost_features_time/processing_time);
-    //printf("Remove camera states time: %f/%f\n",prune_cam_states_time, prune_cam_states_time/processing_time);
-    //printf("Publish time: %f/%f\n", publish_time, publish_time/processing_time);
+    ROS_INFO("\033[1;31mTotal processing time %f/%d...\033[0m",
+        processing_time, critical_time_cntr);
+    //printf("IMU processing time: %f/%f\n",
+    //    imu_processing_time, imu_processing_time/processing_time);
+    //printf("State augmentation time: %f/%f\n",
+    //    state_augmentation_time, state_augmentation_time/processing_time);
+    //printf("Add observations time: %f/%f\n",
+    //    add_observations_time, add_observations_time/processing_time);
+    printf("Remove lost features time: %f/%f\n",
+        remove_lost_features_time, remove_lost_features_time/processing_time);
+    printf("Remove camera states time: %f/%f\n",
+        prune_cam_states_time, prune_cam_states_time/processing_time);
+    //printf("Publish time: %f/%f\n",
+    //    publish_time, publish_time/processing_time);
   }
 
-
-#if 1
-  ROS_INFO("Total processing time %f/%d...\n",processing_time, critical_time_cntr);
-    printf("IMU processing time: %f/%f\n",imu_processing_time, imu_processing_time/processing_time);
-    printf("State augmentation time: %f/%f\n",state_augmentation_time, state_augmentation_time/processing_time);
-    printf("Add observations time: %f/%f\n",add_observations_time, add_observations_time/processing_time);
-    printf("Remove lost features time: %f/%f\n",remove_lost_features_time, remove_lost_features_time/processing_time);
-    printf("Remove camera states time: %f/%f\n",prune_cam_states_time, prune_cam_states_time/processing_time);
-    printf("Publish time: %f/%f\n", publish_time, publish_time/processing_time);
-#endif
-    
-  ROS_INFO("feature calllback cost: %fms", t_r.toc());
   return;
 }
 
@@ -461,8 +469,10 @@ void MsckfVio::mocapOdomCallback(
   //    msg->transform.translation, translation);
   //tf::quaternionMsgToEigen(
   //    msg->transform.rotation, orientation);
-  tf::pointMsgToEigen(msg->pose.pose.position, translation);
-  tf::quaternionMsgToEigen(msg->pose.pose.orientation, orientation);
+  tf::pointMsgToEigen(
+      msg->pose.pose.position, translation);
+  tf::quaternionMsgToEigen(
+      msg->pose.pose.orientation, orientation);
 
   Eigen::Isometry3d T_b_v_gt;
   T_b_v_gt.linear() = orientation.toRotationMatrix();
@@ -478,7 +488,8 @@ void MsckfVio::mocapOdomCallback(
   if (publish_tf) {
     tf::Transform T_b_w_gt_tf;
     tf::transformEigenToTF(T_b_w_gt, T_b_w_gt_tf);
-    tf_pub.sendTransform(tf::StampedTransform(T_b_w_gt_tf, msg->header.stamp, fixed_frame_id, child_frame_id+"_mocap"));
+    tf_pub.sendTransform(tf::StampedTransform(
+          T_b_w_gt_tf, msg->header.stamp, fixed_frame_id, child_frame_id+"_mocap"));
   }
 
   // Ground truth odometry.
@@ -1068,8 +1079,10 @@ void MsckfVio::removeLostFeatures() {
     processed_feature_ids.push_back(feature.id);
   }
 
-  cout << "invalid/processed feature #: " <<  invalid_feature_ids.size() << "/" <<  processed_feature_ids.size() << endl;
-  cout << "jacobian row #: " << jacobian_row_size << endl;
+  //cout << "invalid/processed feature #: " <<
+  //  invalid_feature_ids.size() << "/" <<
+  //  processed_feature_ids.size() << endl;
+  //cout << "jacobian row #: " << jacobian_row_size << endl;
 
   // Remove the features that do not have enough measurements.
   for (const auto& feature_id : invalid_feature_ids)
@@ -1078,7 +1091,8 @@ void MsckfVio::removeLostFeatures() {
   // Return if there is no lost feature to be processed.
   if (processed_feature_ids.size() == 0) return;
 
-  MatrixXd H_x = MatrixXd::Zero(jacobian_row_size,21+6*state_server.cam_states.size());
+  MatrixXd H_x = MatrixXd::Zero(jacobian_row_size,
+      21+6*state_server.cam_states.size());
   VectorXd r = VectorXd::Zero(jacobian_row_size);
   int stack_cntr = 0;
 
@@ -1138,11 +1152,14 @@ void MsckfVio::findRedundantCamStates(
   // Mark the camera states to be removed based on the
   // motion between states.
   for (int i = 0; i < 2; ++i) {
-    const Vector3d position = cam_state_iter->second.position;
-    const Matrix3d rotation = quaternionToRotation(cam_state_iter->second.orientation);
+    const Vector3d position =
+      cam_state_iter->second.position;
+    const Matrix3d rotation = quaternionToRotation(
+        cam_state_iter->second.orientation);
 
     double distance = (position-key_position).norm();
-    double angle = AngleAxisd(rotation*key_rotation.transpose()).angle();
+    double angle = AngleAxisd(
+        rotation*key_rotation.transpose()).angle();
 
     //if (angle < 0.1745 && distance < 0.2 && tracking_rate > 0.5) {
     if (angle < 0.2618 && distance < 0.4 && tracking_rate > 0.5) {
@@ -1405,7 +1422,6 @@ void MsckfVio::publish(const ros::Time& time) {
 
   odom_pub.publish(odom_msg);
 
-
   //publish path
   geometry_msgs::PoseStamped pose_stamped;
   pose_stamped.header = odom_msg.header;
@@ -1415,7 +1431,7 @@ void MsckfVio::publish(const ros::Time& time) {
   path.header.frame_id = "world";
   path.poses.push_back(pose_stamped);
   path_pub.publish(path);
-	
+
   // Publish the 3D positions of the features that
   // has been initialized.
 #if 0
@@ -1449,8 +1465,6 @@ void MsckfVio::publish(const ros::Time& time) {
   }
   feature_pub.publish(feature_msg);
 #endif
-
-  
 
   return;
 }

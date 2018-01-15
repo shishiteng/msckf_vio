@@ -18,8 +18,8 @@
 
 #include <ros/ros.h>
 #include <sensor_msgs/Imu.h>
-#include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
+#include <nav_msgs/Odometry.h>
 #include <tf/transform_broadcaster.h>
 #include <std_srvs/Trigger.h>
 

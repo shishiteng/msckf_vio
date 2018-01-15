@@ -22,10 +22,6 @@
 #include <message_filters/subscriber.h>
 #include <message_filters/time_synchronizer.h>
 
-#include "camodocal/camera_models/CameraFactory.h"
-#include "camodocal/camera_models/CataCamera.h"
-#include "camodocal/camera_models/PinholeCamera.h"
-
 namespace msckf_vio {
 
 /*
@@ -377,12 +373,14 @@ private:
   ros::NodeHandle nh;
 
   // Subscribers and publishers.
-  message_filters::Subscriber<sensor_msgs::Image> cam0_img_sub;
-  message_filters::Subscriber<sensor_msgs::Image> cam1_img_sub;
-  message_filters::TimeSynchronizer<sensor_msgs::Image, sensor_msgs::Image> stereo_sub;
+  message_filters::Subscriber<
+    sensor_msgs::Image> cam0_img_sub;
+  message_filters::Subscriber<
+    sensor_msgs::Image> cam1_img_sub;
+  message_filters::TimeSynchronizer<
+    sensor_msgs::Image, sensor_msgs::Image> stereo_sub;
   ros::Subscriber imu_sub;
   ros::Publisher feature_pub;
-  ros::Publisher feature2_pub;
   ros::Publisher tracking_info_pub;
   image_transport::Publisher debug_stereo_pub;
 
@@ -390,8 +388,6 @@ private:
   std::map<FeatureIDType, int> feature_lifetime;
   void updateFeatureLifetime();
   void featureLifetimeStatistics();
-
-  camodocal::CameraPtr m_camera;
 };
 
 typedef ImageProcessor::Ptr ImageProcessorPtr;
