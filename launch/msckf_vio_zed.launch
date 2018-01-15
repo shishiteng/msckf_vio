@@ -1,17 +1,16 @@
 <launch>
 
-   <node name="rvizvisualisation" pkg="rviz" type="rviz" output="log" args="-d $(find msckf_vio)/rviz/rviz_50t_config.rviz" />
-
   <arg name="fixed_frame_id" default="world"/>
   <arg name="calibration_file"
-    default="$(find msckf_vio)/config/camchain-imucam-50t3.yaml"/>
+    default="$(find msckf_vio)/config/camchain-imucam-zed.yaml"/>
 
   <!-- Image Processor Nodelet  -->
-   <include file="$(find msckf_vio)/launch/image_processor_50t3.launch">
+  <include file="$(find msckf_vio)/launch/image_processor_zed.launch">
     <arg name="calibration_file" value="$(arg calibration_file)"/>
   </include>
 
   <!-- Msckf Vio Nodelet  -->
+
     <node pkg="nodelet" type="nodelet" name="MsckfVio"
       args='standalone msckf_vio/MsckfVioNodelet'
       output="screen">
@@ -20,7 +19,7 @@
       <rosparam command="load" file="$(arg calibration_file)"/>
 
       <param name="publish_tf" value="true"/>
-      <param name="frame_rate" value="30"/>
+      <param name="frame_rate" value="20"/>
       <param name="fixed_frame_id" value="$(arg fixed_frame_id)"/>
       <param name="child_frame_id" value="odom"/>
       <param name="max_cam_state_size" value="20"/>
@@ -34,10 +33,10 @@
       <param name="feature/config/translation_threshold" value="-1.0"/>
 
       <!-- These values should be standard deviation -->
-      <param name="noise/gyro" value="0.0015"/>
-      <param name="noise/acc" value="0.04"/>
-      <param name="noise/gyro_bias" value="0.00015"/>
-      <param name="noise/acc_bias" value="0.002"/>
+      <param name="noise/gyro" value="0.005"/>
+      <param name="noise/acc" value="0.05"/>
+      <param name="noise/gyro_bias" value="0.001"/>
+      <param name="noise/acc_bias" value="0.01"/>
       <param name="noise/feature" value="0.035"/>
 
       <param name="initial_state/velocity/x" value="0.0"/>
@@ -53,8 +52,8 @@
 
       <remap from="~imu" to="/imu0"/>
       <remap from="~features" to="image_processor/features"/>
-      
 
     </node>
+
 
 </launch>

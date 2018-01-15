@@ -21,8 +21,6 @@ find_package(catkin REQUIRED COMPONENTS
   image_transport
   cv_bridge
   message_filters
-  pcl_conversions
-  pcl_ros
   camera_model
 )
 
@@ -31,9 +29,7 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(Boost REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(Cholmod REQUIRED)
-find_package(SPQR REQUIRED)
-find_package(Ceres REQUIRED)
+find_package(SuiteSparse REQUIRED)
 
 add_message_files(
   FILES
@@ -59,19 +55,18 @@ catkin_package(
   CATKIN_DEPENDS
     roscpp std_msgs tf nav_msgs sensor_msgs geometry_msgs
     eigen_conversions tf_conversions message_runtime
-    image_transport cv_bridge message_filters pcl_conversions
-    pcl_ros std_srvs
+    image_transport cv_bridge message_filters 
   DEPENDS
-    Boost EIGEN3 OpenCV
+    Boost EIGEN3 OpenCV SUITESPARSE
 )
 
 include_directories(
   include
   ${catkin_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIR}
-  ${CERES_INCLUDE_DIRS}
   ${Boost_INCLUDE_DIR}
   ${OpenCV_INCLUDE_DIRS}
+  ${SUITESPARSE_INCLUDE_DIRS}
 )
 
 link_directories(
@@ -88,7 +83,7 @@ add_dependencies(msckf_vio
 )
 target_link_libraries(msckf_vio
   ${catkin_LIBRARIES}
-  ${CERES_LIBRARIES}
+  ${SUITESPARSE_LIBRARIES}
 )
 
 # Msckf Vio nodelet
@@ -101,21 +96,8 @@ add_dependencies(msckf_vio_nodelet
 )
 target_link_libraries(msckf_vio_nodelet
   msckf_vio
-  ${CERES_LIBRARIES}
   ${catkin_LIBRARIES}
-/usr/local/lib/libamd.so
-/usr/local/lib/libbtf.so
-/usr/local/lib/libcamd.so
-/usr/local/lib/libccolamd.so
-/usr/local/lib/libcholmod.so
-/usr/local/lib/libcxsparse.so
-/usr/local/lib/libklu.so
-/usr/local/lib/libldl.so
-/usr/local/lib/libmetis.so
-/usr/local/lib/librbio.so
-/usr/local/lib/libspqr.so
-/usr/local/lib/libsuitesparseconfig.so
-/usr/local/lib/libumfpack.so
+  ${SUITESPARSE_LIBRARIES}
 )
 
 # Image processor

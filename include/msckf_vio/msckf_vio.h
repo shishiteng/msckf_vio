@@ -19,6 +19,7 @@
 #include <ros/ros.h>
 #include <sensor_msgs/Imu.h>
 #include <nav_msgs/Odometry.h>
+#include <nav_msgs/Path.h>
 #include <tf/transform_broadcaster.h>
 #include <std_srvs/Trigger.h>
 
@@ -208,6 +209,7 @@ class MsckfVio {
     ros::Subscriber imu_sub;
     ros::Subscriber feature_sub;
     ros::Publisher odom_pub;
+    ros::Publisher path_pub;
     ros::Publisher feature_pub;
     tf::TransformBroadcaster tf_pub;
     ros::ServiceServer reset_srv;
@@ -232,6 +234,7 @@ class MsckfVio {
     ros::Publisher mocap_odom_pub;
     geometry_msgs::TransformStamped raw_mocap_odom_msg;
     Eigen::Isometry3d mocap_initial_frame;
+    nav_msgs::Path path;
 };
 
 typedef MsckfVio::Ptr MsckfVioPtr;
