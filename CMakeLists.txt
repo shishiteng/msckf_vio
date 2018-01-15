@@ -54,10 +54,9 @@ catkin_package(
 #  LIBRARIES msckf_vio
   CATKIN_DEPENDS
     roscpp std_msgs tf nav_msgs sensor_msgs geometry_msgs
-    eigen_conversions tf_conversions message_runtime
-    image_transport cv_bridge message_filters 
-  DEPENDS
-    Boost EIGEN3 OpenCV SUITESPARSE
+    eigen_conversions tf_conversions random_numbers message_runtime
+    image_transport cv_bridge message_filters std_srvs
+  DEPENDS Boost EIGEN3 OpenCV SUITESPARSE
 )
 
 include_directories(
@@ -69,13 +68,10 @@ include_directories(
   ${SUITESPARSE_INCLUDE_DIRS}
 )
 
-link_directories(
-  ${catkin_LIBRARY_DIRS}
-)
-
 # Msckf Vio
 add_library(msckf_vio
   src/msckf_vio.cpp
+  src/utils.cpp
 )
 add_dependencies(msckf_vio
   ${${PROJECT_NAME}_EXPORTED_TARGETS}
@@ -103,6 +99,7 @@ target_link_libraries(msckf_vio_nodelet
 # Image processor
 add_library(image_processor
   src/image_processor.cpp
+  src/utils.cpp
 )
 add_dependencies(image_processor
   ${${PROJECT_NAME}_EXPORTED_TARGETS}
