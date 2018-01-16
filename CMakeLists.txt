@@ -22,6 +22,7 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   message_filters
   std_srvs
+  camera_model
 )
 
 ## System dependencies are found with CMake's conventions
