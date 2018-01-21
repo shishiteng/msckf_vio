@@ -157,6 +157,9 @@ class MsckfVio {
         const Eigen::VectorXd& r);
     bool gatingTest(const Eigen::MatrixXd& H,
         const Eigen::VectorXd&r, const int& dof);
+
+    void publishLostFeatures(std::vector<FeatureIDType> lost_feature_ids, ros::Time timestamp);
+      
     void removeLostFeatures();
     void findRedundantCamStates(
         std::vector<StateIDType>& rm_cam_state_ids);
@@ -230,11 +233,14 @@ class MsckfVio {
     void mocapOdomCallback(
         const nav_msgs::OdometryConstPtr& msg);
 
+    ros::Publisher lost_features_pub;
     ros::Subscriber mocap_odom_sub;
     ros::Publisher mocap_odom_pub;
     geometry_msgs::TransformStamped raw_mocap_odom_msg;
     Eigen::Isometry3d mocap_initial_frame;
     nav_msgs::Path path;
+
+    ros::Time cur_msg_timestamp;
 };
 
 typedef MsckfVio::Ptr MsckfVioPtr;

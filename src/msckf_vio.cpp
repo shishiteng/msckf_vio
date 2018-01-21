@@ -194,6 +194,8 @@ bool MsckfVio::createRosIO() {
       &MsckfVio::mocapOdomCallback, this);
   mocap_odom_pub = nh.advertise<nav_msgs::Odometry>("gt_odom", 1);
 
+  lost_features_pub = nh.advertise<CameraMeasurement>("lost_features", 3);
+  
   return true;
 }
 
@@ -201,6 +203,8 @@ bool MsckfVio::initialize() {
   if (!loadParameters()) return false;
   ROS_INFO("Finish loading ROS parameters...");
 
+  ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Debug);
+  
   // Initialize state server
   state_server.continuous_noise_cov =
     Matrix<double, 12, 12>::Zero();
@@ -358,11 +362,11 @@ bool MsckfVio::resetCallback(
   return true;
 }
 
-void MsckfVio::featureCallback(
-    const CameraMeasurementConstPtr& msg) {
-
+void MsckfVio::featureCallback(const CameraMeasurementConstPtr& msg)
+{
   // Return if the gravity vector has not been set.
-  if (!is_gravity_set) return;
+  if (!is_gravity_set)
+    return;
 
   // Start the system if the first image is received.
   // The frame where the first image is received will be
@@ -372,6 +376,8 @@ void MsckfVio::featureCallback(
     state_server.imu_state.time = msg->header.stamp.toSec();
   }
 
+  cur_msg_timestamp = msg->header.stamp;
+  
   static double max_processing_time = 0.0;
   static int critical_time_cntr = 0;
   double processing_start_time = ros::Time::now().toSec();
@@ -380,38 +386,32 @@ void MsckfVio::featureCallback(
   // that are received before the image msg.
   ros::Time start_time = ros::Time::now();
   batchImuProcessing(msg->header.stamp.toSec());
-  double imu_processing_time = (
-      ros::Time::now()-start_time).toSec();
+  double imu_processing_time = (ros::Time::now()-start_time).toSec();
 
   // Augment the state vector.
   start_time = ros::Time::now();
   stateAugmentation(msg->header.stamp.toSec());
-  double state_augmentation_time = (
-      ros::Time::now()-start_time).toSec();
+  double state_augmentation_time = (ros::Time::now()-start_time).toSec();
 
   // Add new observations for existing features or new
   // features in the map server.
   start_time = ros::Time::now();
   addFeatureObservations(msg);
-  double add_observations_time = (
-      ros::Time::now()-start_time).toSec();
+  double add_observations_time = (ros::Time::now()-start_time).toSec();
 
   // Perform measurement update if necessary.
   start_time = ros::Time::now();
   removeLostFeatures();
-  double remove_lost_features_time = (
-      ros::Time::now()-start_time).toSec();
+  double remove_lost_features_time = (ros::Time::now()-start_time).toSec();
 
   start_time = ros::Time::now();
   pruneCamStateBuffer();
-  double prune_cam_states_time = (
-      ros::Time::now()-start_time).toSec();
+  double prune_cam_states_time = (ros::Time::now()-start_time).toSec();
 
   // Publish the odometry.
   start_time = ros::Time::now();
   publish(msg->header.stamp);
-  double publish_time = (
-      ros::Time::now()-start_time).toSec();
+  double publish_time = (ros::Time::now()-start_time).toSec();
 
   // Reset the system if necessary.
   onlineReset();
@@ -436,6 +436,16 @@ void MsckfVio::featureCallback(
     //printf("Publish time: %f/%f\n",
     //    publish_time, publish_time/processing_time);
   }
+
+#if 1
+  ROS_DEBUG("Total processing time %f",processing_time);
+  ROS_DEBUG("IMU processing time: %f",imu_processing_time);
+  ROS_DEBUG("State augmentation time: %f", state_augmentation_time);
+  ROS_DEBUG("Add observations time: %f",add_observations_time);
+  ROS_DEBUG("Remove lost features time: %f",remove_lost_features_time);
+  ROS_DEBUG("Remove camera states time: %f/%f\n",prune_cam_states_time);
+  ROS_DEBUG("Publish time: %f",publish_time);
+#endif
 
   return;
 }
@@ -1040,6 +1050,21 @@ bool MsckfVio::gatingTest(
   }
 }
 
+void MsckfVio::publishLostFeatures(vector<FeatureIDType> lost_feature_ids, ros::Time timestamp)
+{
+  // Publish features.
+  CameraMeasurementPtr feature_msg_ptr(new CameraMeasurement);
+  feature_msg_ptr->header.stamp = timestamp;
+  feature_msg_ptr->header.frame_id = "lost_features";
+
+  for (int i = 0; i < lost_feature_ids.size(); ++i) {
+    feature_msg_ptr->features.push_back(FeatureMeasurement());
+    feature_msg_ptr->features[i].id = lost_feature_ids[i];
+  }
+
+  lost_features_pub.publish(feature_msg_ptr);
+}
+  
 void MsckfVio::removeLostFeatures() {
 
   // Remove the features that lost track.
@@ -1122,6 +1147,9 @@ void MsckfVio::removeLostFeatures() {
   H_x.conservativeResize(stack_cntr, H_x.cols());
   r.conservativeResize(stack_cntr);
 
+  //
+  publishLostFeatures(processed_feature_ids,cur_msg_timestamp);
+  
   // Perform the measurement update step.
   measurementUpdate(H_x, r);
 

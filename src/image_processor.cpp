@@ -197,11 +197,13 @@ bool ImageProcessor::initialize() {
   if (!loadParameters()) return false;
   ROS_INFO("Finish loading ROS parameters...");
 
+  ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Debug);
+  
   // Create feature detector.
-  detector_ptr = FastFeatureDetector::create(
-      processor_config.fast_threshold);
+  detector_ptr = FastFeatureDetector::create(processor_config.fast_threshold);
 
-  if (!createRosIO()) return false;
+  if (!createRosIO())
+    return false;
   ROS_INFO("Finish creating ROS IO...");
 
   const string calib_file = "/home/sst/catkin_ws/src/VINS-Mono-master/config/visensor_50t#3/fisheye_left.yaml";
@@ -210,70 +212,63 @@ bool ImageProcessor::initialize() {
   return true;
 }
 
-void ImageProcessor::stereoCallback(
-    const sensor_msgs::ImageConstPtr& cam0_img,
-    const sensor_msgs::ImageConstPtr& cam1_img) {
+void ImageProcessor::stereoCallback(const sensor_msgs::ImageConstPtr& cam0_img,const sensor_msgs::ImageConstPtr& cam1_img)
+{
 
   //cout << "==================================" << endl;
+  ros::Time stime = ros::Time::now();
+  ros::Time start_time = ros::Time::now();
 
   // Get the current image.
-  cam0_curr_img_ptr = cv_bridge::toCvShare(cam0_img,
-      sensor_msgs::image_encodings::MONO8);
-  cam1_curr_img_ptr = cv_bridge::toCvShare(cam1_img,
-      sensor_msgs::image_encodings::MONO8);
+  cam0_curr_img_ptr = cv_bridge::toCvShare(cam0_img, sensor_msgs::image_encodings::MONO8);
+  cam1_curr_img_ptr = cv_bridge::toCvShare(cam1_img, sensor_msgs::image_encodings::MONO8);
 
   // Build the image pyramids once since they're used at multiple places
   createImagePyramids();
+  ROS_DEBUG("createImagePyramids: %f",(ros::Time::now()-start_time).toSec());
 
   // Detect features in the first frame.
   if (is_first_img) {
-    ros::Time start_time = ros::Time::now();
+    start_time = ros::Time::now();
     initializeFirstFrame();
-    //ROS_INFO("Detection time: %f",
-    //    (ros::Time::now()-start_time).toSec());
+    ROS_DEBUG("Detection time: %f",(ros::Time::now()-start_time).toSec());
     is_first_img = false;
 
     // Draw results.
     start_time = ros::Time::now();
     drawFeaturesStereo();
-    //ROS_INFO("Draw features: %f",
-    //    (ros::Time::now()-start_time).toSec());
+    ROS_DEBUG("Draw features: %f",(ros::Time::now()-start_time).toSec());
   } else {
     // Track the feature in the previous image.
     ros::Time start_time = ros::Time::now();
     trackFeatures();
-    //ROS_INFO("Tracking time: %f",
-    //    (ros::Time::now()-start_time).toSec());
+    ROS_DEBUG("trackFeatures time: %f",(ros::Time::now()-start_time).toSec());
 
     // Add new features into the current image.
     start_time = ros::Time::now();
     addNewFeatures();
-    //ROS_INFO("Addition time: %f",
-    //    (ros::Time::now()-start_time).toSec());
+    ROS_DEBUG("addNewFeatures time: %f",(ros::Time::now()-start_time).toSec());
 
     // Add new features into the current image.
     start_time = ros::Time::now();
     pruneGridFeatures();
-    //ROS_INFO("Prune grid features: %f",
-    //    (ros::Time::now()-start_time).toSec());
+    ROS_DEBUG("pruneGridFeatures: %f",(ros::Time::now()-start_time).toSec());
 
     // Draw results.
     start_time = ros::Time::now();
     drawFeaturesStereo();
-    //ROS_INFO("Draw features: %f",
-    //    (ros::Time::now()-start_time).toSec());
+    ROS_DEBUG("Draw features: %f",(ros::Time::now()-start_time).toSec());
   }
 
   //ros::Time start_time = ros::Time::now();
   //updateFeatureLifetime();
-  //ROS_INFO("Statistics: %f",
+  //ROS_DEBUG("Statistics: %f",
   //    (ros::Time::now()-start_time).toSec());
 
   // Publish features in the current image.
-  ros::Time start_time = ros::Time::now();
+  start_time = ros::Time::now();
   publish();
-  //ROS_INFO("Publishing: %f",
-  //    (ros::Time::now()-start_time).toSec());
+  ROS_DEBUG("Publishing: %f",(ros::Time::now()-start_time).toSec());
 
   // Update the previous image and previous features.
   cam0_prev_img_ptr = cam0_curr_img_ptr;
@@ -287,6 +282,8 @@ void ImageProcessor::stereoCallback(
     (*curr_features_ptr)[code] = vector<FeatureMetaData>(0);
   }
 
+  ROS_DEBUG("stereoCallback cost: %f",(ros::Time::now()-stime).toSec());
+  
   return;
 }
 
@@ -420,16 +417,17 @@ void ImageProcessor::predictFeatureTracking(
 
 void ImageProcessor::trackFeatures() {
   // Size of each grid.
-  static int grid_height =
-    cam0_curr_img_ptr->image.rows / processor_config.grid_row;
-  static int grid_width =
-    cam0_curr_img_ptr->image.cols / processor_config.grid_col;
+  static int grid_height = cam0_curr_img_ptr->image.rows / processor_config.grid_row;
+  static int grid_width = cam0_curr_img_ptr->image.cols / processor_config.grid_col;
 
+  ros::Time start_time = ros::Time::now();
+  
   // Compute a rough relative rotation which takes a vector
   // from the previous frame to the current frame.
   Matx33f cam0_R_p_c;
   Matx33f cam1_R_p_c;
   integrateImuData(cam0_R_p_c, cam1_R_p_c);
+  ROS_DEBUG("trackFeatures | integrateImuData: %f",(ros::Time::now()-start_time).toSec());
 
   // Organize the features in the previous image.
   vector<FeatureIDType> prev_ids(0);
@@ -457,9 +455,20 @@ void ImageProcessor::trackFeatures() {
   vector<Point2f> curr_cam0_points(0);
   vector<unsigned char> track_inliers(0);
 
-  predictFeatureTracking(prev_cam0_points,
-      cam0_R_p_c, cam0_intrinsics, curr_cam0_points);
+  start_time = ros::Time::now();
+  predictFeatureTracking(prev_cam0_points,cam0_R_p_c, cam0_intrinsics, curr_cam0_points);
+  ROS_DEBUG("trackFeatures | predictFeatureTracking : %f",(ros::Time::now()-start_time).toSec());
 
+#if 0
+  Mat draw_img;
+  cvtColor(cam0_prev_img_ptr->image,draw_img, CV_GRAY2RGB);
+  for(int i=0;i<prev_cam0_points.size();i++) {
+    circle(draw_img, prev_cam0_points[i], 3, Scalar(0,0,255));
+    line(draw_img, prev_cam0_points[i], curr_cam0_points[i], Scalar(255,0,0), 1);
+  }
+#endif
+
+  start_time = ros::Time::now();
   calcOpticalFlowPyrLK(
       prev_cam0_pyramid_, curr_cam0_pyramid_,
       prev_cam0_points, curr_cam0_points,
@@ -470,7 +479,42 @@ void ImageProcessor::trackFeatures() {
         processor_config.max_iteration,
         processor_config.track_precision),
       cv::OPTFLOW_USE_INITIAL_FLOW);
-
+  
+#if 0
+  vector<Point2f> curr_cam0_points2(0);
+  vector<unsigned char> track_inliers2(0);
+  calcOpticalFlowPyrLK(
+		       prev_cam0_pyramid_, curr_cam0_pyramid_,
+		       prev_cam0_points, curr_cam0_points2,
+		       track_inliers2, noArray(),
+		       Size(processor_config.patch_size, processor_config.patch_size),
+		       processor_config.pyramid_levels,
+		       TermCriteria(TermCriteria::COUNT+TermCriteria::EPS,
+			 processor_config.max_iteration,
+			 processor_config.track_precision));
+    
+  int nTrack = 0;
+  for(int i=0;i<prev_cam0_points.size();i++) {
+    if (track_inliers[i] == 0) {
+      circle(draw_img, prev_cam0_points[i], 3, Scalar(255,0,0));
+      continue;
+    }
+    nTrack++;
+    line(draw_img, prev_cam0_points[i], curr_cam0_points[i], Scalar(0,255,0), 2);
+    line(draw_img, prev_cam0_points[i], curr_cam0_points2[i], Scalar(0,0,255), 1);
+  }
+  char str[64];
+  sprintf(str, "track: %d / %d  (%.2f)", nTrack, prev_cam0_points.size(), (float)nTrack/prev_cam0_points.size());
+  rectangle(draw_img, Rect(0,0,200,20), Scalar(0, 0, 0),CV_FILLED);
+  putText(draw_img, str, Point2f(10,10), cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 255, 0));
+  
+  resize(draw_img,draw_img,draw_img.size()*2);
+  imshow("predict points",draw_img);
+  waitKey(1);
+#endif
+  
+  ROS_DEBUG("trackFeatures | calcOpticalFlowPyrLK : %f",(ros::Time::now()-start_time).toSec());
+  
   // Mark those tracked points out of the image region
   // as untracked.
   for (int i = 0; i < curr_cam0_points.size(); ++i) {
@@ -522,10 +566,13 @@ void ImageProcessor::trackFeatures() {
   // For Step 3, tracking between the images is no longer needed.
   // The stereo matching results are directly used in the RANSAC.
 
+
   // Step 1: stereo matching.
+  start_time = ros::Time::now();
   vector<Point2f> curr_cam1_points(0);
   vector<unsigned char> match_inliers(0);
   stereoMatch(curr_tracked_cam0_points, curr_cam1_points, match_inliers);
+  ROS_DEBUG("trackFeatures | stereoMatch : %f",(ros::Time::now()-start_time).toSec());
 
   vector<FeatureIDType> prev_matched_ids(0);
   vector<int> prev_matched_lifetime(0);
@@ -551,6 +598,7 @@ void ImageProcessor::trackFeatures() {
   after_matching = curr_matched_cam0_points.size();
 
   // Step 2 and 3: RANSAC on temporal image pairs of cam0 and cam1.
+  start_time = ros::Time::now();
   vector<int> cam0_ransac_inliers(0);
   twoPointRansac(prev_matched_cam0_points, curr_matched_cam0_points,
       cam0_R_p_c, cam0_intrinsics, cam0_distortion_model,
@@ -562,7 +610,8 @@ void ImageProcessor::trackFeatures() {
       cam1_R_p_c, cam1_intrinsics, cam1_distortion_model,
       cam1_distortion_coeffs, processor_config.ransac_threshold,
       0.99, cam1_ransac_inliers);
-
+  ROS_DEBUG("trackFeatures | twoPointRansac : %f",(ros::Time::now()-start_time).toSec());
+  
   // Number of features after ransac.
   after_ransac = 0;
 
@@ -977,8 +1026,8 @@ void ImageProcessor::rescalePoints(
     scaling_factor += sqrt(pts2[i].dot(pts2[i]));
   }
 
-  scaling_factor = (pts1.size()+pts2.size()) /
-    scaling_factor * sqrt(2.0f);
+  scaling_factor = (pts1.size()+pts2.size()) / scaling_factor * sqrt(2.0f);
+  //scaling_factor = (pts1.size()+pts2.size()) / scaling_factor * sqrt(2.0f);
 
   for (int i = 0; i < pts1.size(); ++i) {
     pts1[i] *= scaling_factor;
@@ -1031,10 +1080,12 @@ void ImageProcessor::twoPointRansac(
   }
 
   // Normalize the points to gain numerical stability.
-  float scaling_factor = 0.0f;
+  float scaling_factor = 1.0f;
   rescalePoints(pts1_undistorted, pts2_undistorted, scaling_factor);
   norm_pixel_unit *= scaling_factor;
 
+  ROS_DEBUG("scale factor:%f",scaling_factor);
+  
   // Compute the difference between previous and current points,
   // which will be used frequently later.
   vector<Point2d> pts_diff(pts1_undistorted.size());
@@ -1234,6 +1285,7 @@ void ImageProcessor::publish() {
   // Publish features.
   CameraMeasurementPtr feature_msg_ptr(new CameraMeasurement);
   feature_msg_ptr->header.stamp = cam0_curr_img_ptr->header.stamp;
+  feature_msg_ptr->header.frame_id = "features";
 
   vector<FeatureIDType> curr_ids(0);
   vector<Point2f> curr_cam0_points(0);
@@ -1264,6 +1316,12 @@ void ImageProcessor::publish() {
     feature_msg_ptr->features[i].v0 = curr_cam0_points_undistorted[i].y;
     feature_msg_ptr->features[i].u1 = curr_cam1_points_undistorted[i].x;
     feature_msg_ptr->features[i].v1 = curr_cam1_points_undistorted[i].y;
+    
+    //distorted points
+    feature_msg_ptr->features[i].du0 = curr_cam0_points[i].x;
+    feature_msg_ptr->features[i].dv0 = curr_cam0_points[i].y;
+    feature_msg_ptr->features[i].du1 = curr_cam1_points[i].x;
+    feature_msg_ptr->features[i].dv1 = curr_cam1_points[i].y;
   }
 
   feature_pub.publish(feature_msg_ptr);
@@ -1387,19 +1445,15 @@ void ImageProcessor::drawFeaturesStereo() {
     Scalar tracked(0, 255, 0);
     Scalar new_feature(0, 255, 255);
 
-    static int grid_height =
-      cam0_curr_img_ptr->image.rows / processor_config.grid_row;
-    static int grid_width =
-      cam0_curr_img_ptr->image.cols / processor_config.grid_col;
+    static int grid_height = cam0_curr_img_ptr->image.rows / processor_config.grid_row;
+    static int grid_width = cam0_curr_img_ptr->image.cols / processor_config.grid_col;
 
     // Create an output image.
     int img_height = cam0_curr_img_ptr->image.rows;
     int img_width = cam0_curr_img_ptr->image.cols;
     Mat out_img(img_height, img_width*2, CV_8UC3);
-    cvtColor(cam0_curr_img_ptr->image,
-             out_img.colRange(0, img_width), CV_GRAY2RGB);
-    cvtColor(cam1_curr_img_ptr->image,
-             out_img.colRange(img_width, img_width*2), CV_GRAY2RGB);
+    cvtColor(cam0_curr_img_ptr->image, out_img.colRange(0, img_width), CV_GRAY2RGB);
+    cvtColor(cam1_curr_img_ptr->image, out_img.colRange(img_width, img_width*2), CV_GRAY2RGB);
 
     // Draw grids on the image.
     for (int i = 1; i < processor_config.grid_row; ++i) {
@@ -1442,6 +1496,9 @@ void ImageProcessor::drawFeaturesStereo() {
         curr_cam1_points[feature.id] = feature.cam1_point;
       }
 
+    int nTrack = 0;
+    char str[64];
+    
     // Draw tracked features.
     for (const auto& id : prev_ids) {
       if (prev_cam0_points.find(id) != prev_cam0_points.end() &&
@@ -1460,18 +1517,32 @@ void ImageProcessor::drawFeaturesStereo() {
         prev_cam1_points.erase(id);
         curr_cam0_points.erase(id);
         curr_cam1_points.erase(id);
+
+	//sprintf(str, "%d", id);
+	//putText(out_img, str, curr_pt0, cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 255, 0));
+	nTrack++;
       }
     }
 
+    
     // Draw new features.
     for (const auto& new_cam0_point : curr_cam0_points) {
       cv::Point2f pt0 = new_cam0_point.second;
-      cv::Point2f pt1 = curr_cam1_points[new_cam0_point.first] +
-        Point2f(img_width, 0.0);
+      cv::Point2f pt1 = curr_cam1_points[new_cam0_point.first] + Point2f(img_width, 0.0);
 
       circle(out_img, pt0, 3, new_feature, -1);
       circle(out_img, pt1, 3, new_feature, -1);
     }
+
+    //draw text
+    sprintf(str, "track count: %03d / %03d / %.2f",nTrack,prev_ids.size(),(float)nTrack/prev_ids.size());
+    rectangle(out_img, Rect(0,0,200,50), Scalar(0, 0, 0),CV_FILLED);
+    putText(out_img, str, Point(8, 12),FONT_HERSHEY_SIMPLEX, 0.5, Scalar(200, 200, 200));
+    sprintf(str, "new  count: %03d",curr_cam0_points.size());
+    putText(out_img, str, Point(8, 12)+Point(0, 20),FONT_HERSHEY_SIMPLEX, 0.5, Scalar(200, 200, 200));
+
+
+    
 
     cv_bridge::CvImage debug_image(cam0_curr_img_ptr->header, "bgr8", out_img);
     debug_stereo_pub.publish(debug_image.toImageMsg());
