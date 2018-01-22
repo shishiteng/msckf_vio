@@ -1064,7 +1064,9 @@ void MsckfVio::publishLostFeatures(vector<FeatureIDType> lost_feature_ids, ros::
 
   lost_features_pub.publish(feature_msg_ptr);
 }
-  
+
+//1.用跟踪超过1帧、且能算出3d位置的点做update
+//2.移除所有丢失的点
 void MsckfVio::removeLostFeatures() {
 
   // Remove the features that lost track.
@@ -1073,19 +1075,31 @@ void MsckfVio::removeLostFeatures() {
   vector<FeatureIDType> invalid_feature_ids(0);
   vector<FeatureIDType> processed_feature_ids(0);
 
-  for (auto iter = map_server.begin();
-      iter != map_server.end(); ++iter) {
+  //        map_server:类型是 map<featureID,features>
+  //                   在这里包含了从前一帧跟到的、跟丢的，还有这一帧中的新加的点
+  //                   执行完这个函数，就只剩跟踪到的和新加的点了，别怀疑，没问题！
+  //invalid   features:当前帧中丢失，只跟踪了1帧的，还有跟踪超过1帧但不能被初始化的点
+  //processed features:当前帧中丢失，之前跟踪大于1帧的，并且能算出3d位置的点
+  //tracking  features:跟踪到的点
+  
+  for (auto iter = map_server.begin();iter != map_server.end(); ++iter) {
     // Rename the feature to be checked.
     auto& feature = iter->second;
 
+    //当前帧中还被跟踪到的点
+    //注：observations是n，则跟踪了n-1帧
+    // observation 结构：map<stateID, ...> ,find(id)=end就说明迭代结束都没找到(丢了)
     // Pass the features that are still being tracked.
-    if (feature.observations.find(state_server.imu_state.id) !=
-        feature.observations.end()) continue;
+    if (feature.observations.find(state_server.imu_state.id) != feature.observations.end())
+      continue;
+    
+    //只跟了一帧的，加入invalid
     if (feature.observations.size() < 3) {
       invalid_feature_ids.push_back(feature.id);
       continue;
     }
 
+    //如果这个点之前没有算出3d位置，检查帧间的平移，尝试计算其3d坐标，如果失败，加入invalid
     // Check if the feature can be initialized if it
     // has not been.
     if (!feature.is_initialized) {
@@ -1100,10 +1114,12 @@ void MsckfVio::removeLostFeatures() {
       }
     }
 
+    //这里剩下的都是在当前帧中丢失、但之前跟踪超过1帧、并且能算出3d位置的点
     jacobian_row_size += 4*feature.observations.size() - 3;
     processed_feature_ids.push_back(feature.id);
   }
 
+  //这里的点分3种：还被跟到的、
   //cout << "invalid/processed feature #: " <<
   //  invalid_feature_ids.size() << "/" <<
   //  processed_feature_ids.size() << endl;
@@ -1129,6 +1145,7 @@ void MsckfVio::removeLostFeatures() {
     for (const auto& measurement : feature.observations)
       cam_state_ids.push_back(measurement.first);
 
+    // 对feature求雅可比，所有能观测到这个feature的camera state
     MatrixXd H_xj;
     VectorXd r_j;
     featureJacobian(feature.id, cam_state_ids, H_xj, r_j);
@@ -1163,6 +1180,15 @@ void MsckfVio::removeLostFeatures() {
 void MsckfVio::findRedundantCamStates(
     vector<StateIDType>& rm_cam_state_ids) {
 
+  //              first_cam                    key_cam  cam_state           current
+  //                  |                          |         |                   |
+  //sliding window:   x      x      x     x ...  x         x        x     x    x 
+  //                                              \        /        /
+  //                                               \      /        /
+  //                                            检查位置变化      /       小：删除cam_state，大：删除first
+  //                                                 \           /
+  //                                                 过小则检查这两个
+  
   // Move the iterator to the key position.
   auto key_cam_state_iter = state_server.cam_states.end();
   for (int i = 0; i < 4; ++i)
@@ -1189,8 +1215,15 @@ void MsckfVio::findRedundantCamStates(
     double angle = AngleAxisd(
         rotation*key_rotation.transpose()).angle();
 
+    //这里会不会有问题：旋转的时候视差很大，但是位移不一定能有0.4米，这时候应该marg的是first？
+    //position：0.4
+    //   angle：0.2618*57.3=15 deg，0.1745=10 deg
+    //tracking_rate是什么鬼？
+    //这里是不是该改成用视差来选取？
+    
     //if (angle < 0.1745 && distance < 0.2 && tracking_rate > 0.5) {
     if (angle < 0.2618 && distance < 0.4 && tracking_rate > 0.5) {
+    //if (angle < 0.02 && distance < 0.05) {
       rm_cam_state_ids.push_back(cam_state_iter->first);
       ++cam_state_iter;
     } else {
@@ -1205,17 +1238,37 @@ void MsckfVio::findRedundantCamStates(
   return;
 }
 
+/*                         feature
+ *                        / /  |  
+ *                     /   /  /|  
+ *                  /    /   / |
+ *                /    /    /  |  
+ *             /      /    /   |  
+ *          /       /     /    |  
+ * frame  f0       f1    f2   fn
+ *         |       |           |
+ *     marg0    marg1          |
+ *         |       |           |
+ *    (involved frames)     current
+ */
 void MsckfVio::pruneCamStateBuffer() {
 
   if (state_server.cam_states.size() < max_cam_state_size)
     return;
 
+  // 1.找到要被边缘化掉的帧
   // Find two camera states to be removed.
   vector<StateIDType> rm_cam_state_ids(0);
   findRedundantCamStates(rm_cam_state_ids);
 
+
+  // 2.找出marignalized帧和当前帧的共视点，并把约束弱的点从观测中剔除
+  //   保留约束强的点(被2个或2个以上marinalized帧和当前帧同时观测到，并且成功能三角化)
+  
   // Find the size of the Jacobian matrix.
   int jacobian_row_size = 0;
+
+  // 这一步的map_server:只包含当前帧还能跟踪的点和新点
   for (auto& item : map_server) {
     auto& feature = item.second;
     // Check how many camera states to be removed are associated
@@ -1227,12 +1280,20 @@ void MsckfVio::pruneCamStateBuffer() {
         involved_cam_state_ids.push_back(cam_id);
     }
 
-    if (involved_cam_state_ids.size() == 0) continue;
+    // 注意：
+    // msckf_vio里设置是要marginalize掉2帧，所以这一步involved_cam_state的size最多是2
+    // 如果是0：两帧跟当前帧都没有共视，跳过
+    // 如果是1：1帧有共视，另1帧没有共视，约束较弱，放弃这个feature
+    // 如果是2：2帧都与当前帧有共视，接下来保留三角化成功的点
+
+    if (involved_cam_state_ids.size() == 0)
+      continue;
     if (involved_cam_state_ids.size() == 1) {
       feature.observations.erase(involved_cam_state_ids[0]);
       continue;
     }
 
+    // 如果不能三角化，放弃这个feature
     if (!feature.is_initialized) {
       // Check if the feature can be initialize.
       if (!feature.checkMotion(state_server.cam_states)) {
@@ -1256,12 +1317,14 @@ void MsckfVio::pruneCamStateBuffer() {
 
   //cout << "jacobian row #: " << jacobian_row_size << endl;
 
+  // 计算雅可比
   // Compute the Jacobian and residual.
   MatrixXd H_x = MatrixXd::Zero(jacobian_row_size,
       21+6*state_server.cam_states.size());
   VectorXd r = VectorXd::Zero(jacobian_row_size);
   int stack_cntr = 0;
 
+  // 3.计算每个feature和所有marnalized帧的雅可比，然后掐断该feature与这些帧的联系
   for (auto& item : map_server) {
     auto& feature = item.second;
     // Check how many camera states to be removed are associated
@@ -1275,6 +1338,7 @@ void MsckfVio::pruneCamStateBuffer() {
 
     if (involved_cam_state_ids.size() == 0) continue;
 
+    // 计算feature和marinalized帧的雅可比
     MatrixXd H_xj;
     VectorXd r_j;
     featureJacobian(feature.id, involved_cam_state_ids, H_xj, r_j);
@@ -1285,6 +1349,7 @@ void MsckfVio::pruneCamStateBuffer() {
       stack_cntr += H_xj.rows();
     }
 
+    // 从feature的观测中移除所有marginalized帧
     for (const auto& cam_id : involved_cam_state_ids)
       feature.observations.erase(cam_id);
   }
@@ -1292,6 +1357,8 @@ void MsckfVio::pruneCamStateBuffer() {
   H_x.conservativeResize(stack_cntr, H_x.cols());
   r.conservativeResize(stack_cntr);
 
+  // 4.kalman filter更新
+  
   // Perform measurement update.
   measurementUpdate(H_x, r);
 
@@ -1325,6 +1392,7 @@ void MsckfVio::pruneCamStateBuffer() {
           state_server.state_cov.rows()-6, state_server.state_cov.cols()-6);
     }
 
+    // 移除边缘化帧
     // Remove this camera state in the state vector.
     state_server.cam_states.erase(cam_id);
   }
