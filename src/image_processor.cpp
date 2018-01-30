@@ -197,7 +197,8 @@ bool ImageProcessor::initialize() {
   if (!loadParameters()) return false;
   ROS_INFO("Finish loading ROS parameters...");
 
-  ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Debug);
+  //ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Debug);
+  ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info);
   
   // Create feature detector.
   detector_ptr = FastFeatureDetector::create(processor_config.fast_threshold);
@@ -451,67 +452,65 @@ void ImageProcessor::trackFeatures() {
   // the previous frame.
   if (prev_ids.size() == 0) return;
 
+  //debug模式，纯视觉的光流跟踪
+  int debug_tracking = 0;
+  Mat draw_img;
+  if(debug_tracking) {
+    cvtColor(cam0_prev_img_ptr->image,draw_img, CV_GRAY2RGB);
+    vector<Point2f> curr_cam0_points2(0);
+    vector<unsigned char> track_inliers2(0);
+    calcOpticalFlowPyrLK(
+			 prev_cam0_pyramid_, curr_cam0_pyramid_,
+			 prev_cam0_points, curr_cam0_points2,
+			 track_inliers2, noArray(),
+			 Size(processor_config.patch_size, processor_config.patch_size),
+			 processor_config.pyramid_levels,
+			 TermCriteria(TermCriteria::COUNT+TermCriteria::EPS,
+				      processor_config.max_iteration,
+				      processor_config.track_precision));
+    
+    int nTrack = 0;
+    for(int i=0;i<prev_cam0_points.size();i++) {
+      if (track_inliers2[i] == 0)
+	continue;
+      nTrack++;
+      line(draw_img, prev_cam0_points[i], curr_cam0_points2[i], Scalar(0,0,255), 3);
+    }
+    char str[64];
+    sprintf(str, "     LK track: %d / %d  (%.2f)", nTrack, prev_cam0_points.size(), (float)nTrack/prev_cam0_points.size());
+    rectangle(draw_img, Rect(0,0,200,40), Scalar(0, 0, 0),CV_FILLED);
+    putText(draw_img, str, Point2f(10,10), cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 255, 0));
+  }
+
   // Track features using LK optical flow method.
   vector<Point2f> curr_cam0_points(0);
   vector<unsigned char> track_inliers(0);
 
+  // gyro辅助的光流跟踪
   start_time = ros::Time::now();
   predictFeatureTracking(prev_cam0_points,cam0_R_p_c, cam0_intrinsics, curr_cam0_points);
   ROS_DEBUG("trackFeatures | predictFeatureTracking : %f",(ros::Time::now()-start_time).toSec());
 
-#if 0
-  Mat draw_img;
-  cvtColor(cam0_prev_img_ptr->image,draw_img, CV_GRAY2RGB);
-  for(int i=0;i<prev_cam0_points.size();i++) {
-    circle(draw_img, prev_cam0_points[i], 3, Scalar(0,0,255));
-    line(draw_img, prev_cam0_points[i], curr_cam0_points[i], Scalar(255,0,0), 1);
+  //debug模式，gyro-aided klt预测结果
+  if(debug_tracking) {
+    for(int i=0;i<prev_cam0_points.size();i++) {
+      circle(draw_img, prev_cam0_points[i], 4, Scalar(0,255,255));
+      line(draw_img, prev_cam0_points[i], curr_cam0_points[i], Scalar(255,0,0), 2);
+    }
   }
-#endif
 
   start_time = ros::Time::now();
   calcOpticalFlowPyrLK(
-      prev_cam0_pyramid_, curr_cam0_pyramid_,
-      prev_cam0_points, curr_cam0_points,
-      track_inliers, noArray(),
-      Size(processor_config.patch_size, processor_config.patch_size),
-      processor_config.pyramid_levels,
-      TermCriteria(TermCriteria::COUNT+TermCriteria::EPS,
-        processor_config.max_iteration,
-        processor_config.track_precision),
-      cv::OPTFLOW_USE_INITIAL_FLOW);
-  
-#if 0
-  vector<Point2f> curr_cam0_points2(0);
-  vector<unsigned char> track_inliers2(0);
-  calcOpticalFlowPyrLK(
 		       prev_cam0_pyramid_, curr_cam0_pyramid_,
-		       prev_cam0_points, curr_cam0_points2,
-		       track_inliers2, noArray(),
+		       prev_cam0_points, curr_cam0_points,
+		       track_inliers, noArray(),
 		       Size(processor_config.patch_size, processor_config.patch_size),
 		       processor_config.pyramid_levels,
 		       TermCriteria(TermCriteria::COUNT+TermCriteria::EPS,
-			 processor_config.max_iteration,
-			 processor_config.track_precision));
-    
-  int nTrack = 0;
-  for(int i=0;i<prev_cam0_points.size();i++) {
-    if (track_inliers[i] == 0) {
-      circle(draw_img, prev_cam0_points[i], 3, Scalar(255,0,0));
-      continue;
-    }
-    nTrack++;
-    line(draw_img, prev_cam0_points[i], curr_cam0_points[i], Scalar(0,255,0), 2);
-    line(draw_img, prev_cam0_points[i], curr_cam0_points2[i], Scalar(0,0,255), 1);
-  }
-  char str[64];
-  sprintf(str, "track: %d / %d  (%.2f)", nTrack, prev_cam0_points.size(), (float)nTrack/prev_cam0_points.size());
-  rectangle(draw_img, Rect(0,0,200,20), Scalar(0, 0, 0),CV_FILLED);
-  putText(draw_img, str, Point2f(10,10), cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 255, 0));
-  
-  resize(draw_img,draw_img,draw_img.size()*2);
-  imshow("predict points",draw_img);
-  waitKey(1);
-#endif
+				    processor_config.max_iteration,
+				    processor_config.track_precision),
+		       cv::OPTFLOW_USE_INITIAL_FLOW);
+
   
   ROS_DEBUG("trackFeatures | calcOpticalFlowPyrLK : %f",(ros::Time::now()-start_time).toSec());
   
@@ -524,6 +523,26 @@ void ImageProcessor::trackFeatures() {
         curr_cam0_points[i].x < 0 ||
         curr_cam0_points[i].x > cam0_curr_img_ptr->image.cols-1)
       track_inliers[i] = 0;
+  }
+
+  // debug模式，gyro-aided klt最终结果
+  if(debug_tracking) {
+    int nTrack = 0;
+    for (int i = 0; i < curr_cam0_points.size(); ++i) {
+      if (track_inliers[i] == 0)
+	continue;
+      //circle(draw_img, prev_cam0_points[i], 3, Scalar(0,0,255));
+      line(draw_img, prev_cam0_points[i], curr_cam0_points[i], Scalar(0,255,0), 1);
+      nTrack++;
+    }
+    char str[64];
+    sprintf(str, "gyro-LK track: %d / %d  (%.2f)", nTrack, prev_cam0_points.size(), (float)nTrack/prev_cam0_points.size());
+    putText(draw_img, str, Point2f(10,25), cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 255, 0));
+    putText(draw_img, "b/g/r:  predict/imu-klt/klt", Point2f(10,40), cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 255, 0));
+  
+    resize(draw_img,draw_img,draw_img.size()*2);
+    imshow("predict points",draw_img);
+    waitKey(1);
   }
 
   // Collect the tracked points.

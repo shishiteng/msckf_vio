@@ -159,6 +159,7 @@ class MsckfVio {
         const Eigen::VectorXd&r, const int& dof);
 
     void publishLostFeatures(std::vector<FeatureIDType> lost_feature_ids, ros::Time timestamp);
+    void publishUsedFeatures(std::vector<FeatureIDType> used_feature_ids, ros::Time timestamp);
       
     void removeLostFeatures();
     void findRedundantCamStates(
@@ -213,6 +214,9 @@ class MsckfVio {
     ros::Subscriber feature_sub;
     ros::Publisher odom_pub;
     ros::Publisher path_pub;
+    ros::Publisher path_window_pub;   //current sliding window
+    ros::Publisher path_window0_pub;  //path of sliding window
+    ros::Publisher marg_frames_pub;  //path of sliding window
     ros::Publisher feature_pub;
     tf::TransformBroadcaster tf_pub;
     ros::ServiceServer reset_srv;
@@ -234,13 +238,16 @@ class MsckfVio {
         const nav_msgs::OdometryConstPtr& msg);
 
     ros::Publisher lost_features_pub;
+    ros::Publisher used_features_pub;
     ros::Subscriber mocap_odom_sub;
     ros::Publisher mocap_odom_pub;
     geometry_msgs::TransformStamped raw_mocap_odom_msg;
     Eigen::Isometry3d mocap_initial_frame;
     nav_msgs::Path path;
+    nav_msgs::Path path_window0; //sliding window里的最早帧
 
     ros::Time cur_msg_timestamp;
+    std::vector<CAMState> marginalized_states;
 };
 
 typedef MsckfVio::Ptr MsckfVioPtr;

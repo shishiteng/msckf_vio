@@ -177,10 +177,14 @@ bool MsckfVio::loadParameters() {
 
 bool MsckfVio::createRosIO() {
   odom_pub = nh.advertise<nav_msgs::Odometry>("odom", 10);
-  feature_pub = nh.advertise<sensor_msgs::PointCloud2>(
-      "feature_point_cloud", 10);
+  feature_pub = nh.advertise<sensor_msgs::PointCloud>("feature_point_cloud", 10);
 
-  path_pub = nh.advertise<nav_msgs::Path>("path", 1000);
+  path_pub = nh.advertise<nav_msgs::Path>("path", 1000);  //path
+
+  //sliding window
+  path_window_pub = nh.advertise<nav_msgs::Path>("sliding_window", 1);
+  path_window0_pub = nh.advertise<nav_msgs::Path>("first_frame_of_sliding_window", 1);
+  marg_frames_pub = nh.advertise<nav_msgs::Path>("marginalized_frame", 1);
 
   reset_srv = nh.advertiseService("reset",
       &MsckfVio::resetCallback, this);
@@ -194,7 +198,8 @@ bool MsckfVio::createRosIO() {
       &MsckfVio::mocapOdomCallback, this);
   mocap_odom_pub = nh.advertise<nav_msgs::Odometry>("gt_odom", 1);
 
-  lost_features_pub = nh.advertise<CameraMeasurement>("lost_features", 3);
+  lost_features_pub = nh.advertise<CameraMeasurement>("lost_features", 1);
+  used_features_pub = nh.advertise<CameraMeasurement>("used_features", 1);
   
   return true;
 }
@@ -364,6 +369,8 @@ bool MsckfVio::resetCallback(
 
 void MsckfVio::featureCallback(const CameraMeasurementConstPtr& msg)
 {
+  ROS_DEBUG("featureCallback | %lf",msg->header.stamp.toSec());
+  
   // Return if the gravity vector has not been set.
   if (!is_gravity_set)
     return;
@@ -382,28 +389,33 @@ void MsckfVio::featureCallback(const CameraMeasurementConstPtr& msg)
   static int critical_time_cntr = 0;
   double processing_start_time = ros::Time::now().toSec();
 
+  // 1.imu状态传播
   // Propogate the IMU state.
   // that are received before the image msg.
   ros::Time start_time = ros::Time::now();
   batchImuProcessing(msg->header.stamp.toSec());
   double imu_processing_time = (ros::Time::now()-start_time).toSec();
 
+  // 2.状态增强
   // Augment the state vector.
   start_time = ros::Time::now();
   stateAugmentation(msg->header.stamp.toSec());
   double state_augmentation_time = (ros::Time::now()-start_time).toSec();
 
+  // 3.添加新的观测
   // Add new observations for existing features or new
   // features in the map server.
   start_time = ros::Time::now();
   addFeatureObservations(msg);
   double add_observations_time = (ros::Time::now()-start_time).toSec();
 
+  // 4.移除跟踪丢失的点，并用丢失的点update
   // Perform measurement update if necessary.
   start_time = ros::Time::now();
   removeLostFeatures();
   double remove_lost_features_time = (ros::Time::now()-start_time).toSec();
 
+  // 5.marginalize掉2帧，用marginalized帧中约束好的点update
   start_time = ros::Time::now();
   pruneCamStateBuffer();
   double prune_cam_states_time = (ros::Time::now()-start_time).toSec();
@@ -421,7 +433,7 @@ void MsckfVio::featureCallback(const CameraMeasurementConstPtr& msg)
     processing_end_time - processing_start_time;
   if (processing_time > 1.0/frame_rate) {
     ++critical_time_cntr;
-    ROS_INFO("\033[1;31mTotal processing time %f/%d...\033[0m",
+    ROS_INFO("Total processing time %f/%d...",
         processing_time, critical_time_cntr);
     //printf("IMU processing time: %f/%f\n",
     //    imu_processing_time, imu_processing_time/processing_time);
@@ -429,23 +441,21 @@ void MsckfVio::featureCallback(const CameraMeasurementConstPtr& msg)
     //    state_augmentation_time, state_augmentation_time/processing_time);
     //printf("Add observations time: %f/%f\n",
     //    add_observations_time, add_observations_time/processing_time);
-    printf("Remove lost features time: %f/%f\n",
+    printf("Remove lost features time: %lf/%lf\n",
         remove_lost_features_time, remove_lost_features_time/processing_time);
-    printf("Remove camera states time: %f/%f\n",
+    printf("Remove camera states time: %lf/%lf\n",
         prune_cam_states_time, prune_cam_states_time/processing_time);
     //printf("Publish time: %f/%f\n",
     //    publish_time, publish_time/processing_time);
   }
 
-#if 1
-  ROS_DEBUG("Total processing time %f",processing_time);
-  ROS_DEBUG("IMU processing time: %f",imu_processing_time);
-  ROS_DEBUG("State augmentation time: %f", state_augmentation_time);
-  ROS_DEBUG("Add observations time: %f",add_observations_time);
-  ROS_DEBUG("Remove lost features time: %f",remove_lost_features_time);
-  ROS_DEBUG("Remove camera states time: %f/%f\n",prune_cam_states_time);
+  ROS_DEBUG("Total processing time %lf",processing_time);
+  ROS_DEBUG("IMU processing time: %lf",imu_processing_time);
+  ROS_DEBUG("State augmentation time: %lf", state_augmentation_time);
+  ROS_DEBUG("Add observations time: %lf",add_observations_time);
+  ROS_DEBUG("Remove lost features time: %lf",remove_lost_features_time);
+  ROS_DEBUG("Remove camera states time: %lf\n",prune_cam_states_time);
   ROS_DEBUG("Publish time: %f",publish_time);
-#endif
 
   return;
 }
@@ -1050,6 +1060,24 @@ bool MsckfVio::gatingTest(
   }
 }
 
+#if 0
+void MsckfVio::publishMarginalizedFeatures(vector<FeatureIDType> marginalized_feature_ids, ros::Time timestamp)
+{
+  // Publish features.
+  CameraMeasurementPtr feature_msg_ptr(new CameraMeasurement);
+  feature_msg_ptr->header.stamp = timestamp;
+  feature_msg_ptr->header.frame_id = "marginalized_features";
+
+  for (int i = 0; i < marginalized_feature_ids.size(); ++i) {
+    feature_msg_ptr->features.push_back(FeatureMeasurement());
+    feature_msg_ptr->features[i].id = marginalized_feature_ids[i];
+  }
+
+  marginalized_features_pub.publish(feature_msg_ptr);
+}
+#endif
+
+  
 void MsckfVio::publishLostFeatures(vector<FeatureIDType> lost_feature_ids, ros::Time timestamp)
 {
   // Publish features.
@@ -1065,6 +1093,22 @@ void MsckfVio::publishLostFeatures(vector<FeatureIDType> lost_feature_ids, ros::
   lost_features_pub.publish(feature_msg_ptr);
 }
 
+void MsckfVio::publishUsedFeatures(vector<FeatureIDType> used_feature_ids, ros::Time timestamp)
+{
+  // Publish features.
+  CameraMeasurementPtr feature_msg_ptr(new CameraMeasurement);
+  feature_msg_ptr->header.stamp = timestamp;
+  feature_msg_ptr->header.frame_id = "used_features";
+  for (int i = 0; i < used_feature_ids.size(); ++i) {
+    feature_msg_ptr->features.push_back(FeatureMeasurement());
+    feature_msg_ptr->features[i].id = used_feature_ids[i];
+  }
+
+  used_features_pub.publish(feature_msg_ptr);
+}
+
+  
+
 //1.用跟踪超过1帧、且能算出3d位置的点做update
 //2.移除所有丢失的点
 void MsckfVio::removeLostFeatures() {
@@ -1079,21 +1123,22 @@ void MsckfVio::removeLostFeatures() {
   //                   在这里包含了从前一帧跟到的、跟丢的，还有这一帧中的新加的点
   //                   执行完这个函数，就只剩跟踪到的和新加的点了，别怀疑，没问题！
   //invalid   features:当前帧中丢失，只跟踪了1帧的，还有跟踪超过1帧但不能被初始化的点
-  //processed features:当前帧中丢失，之前跟踪大于1帧的，并且能算出3d位置的点
+  //processed features:当前帧中丢失，之前跟踪大于1帧，并且能算出3d位置的点
   //tracking  features:跟踪到的点
+  //     new  features:新添加的点
   
   for (auto iter = map_server.begin();iter != map_server.end(); ++iter) {
     // Rename the feature to be checked.
     auto& feature = iter->second;
 
-    //当前帧中还被跟踪到的点
+    //当前帧中还被跟踪到的点和新加的点,跳过
     //注：observations是n，则跟踪了n-1帧
     // observation 结构：map<stateID, ...> ,find(id)=end就说明迭代结束都没找到(丢了)
     // Pass the features that are still being tracked.
     if (feature.observations.find(state_server.imu_state.id) != feature.observations.end())
       continue;
     
-    //只跟了一帧的，加入invalid
+    //只跟了一帧的点，加入invalid
     if (feature.observations.size() < 3) {
       invalid_feature_ids.push_back(feature.id);
       continue;
@@ -1119,9 +1164,14 @@ void MsckfVio::removeLostFeatures() {
     processed_feature_ids.push_back(feature.id);
   }
 
-  //这里的点分3种：还被跟到的、
-  //cout << "invalid/processed feature #: " <<
-  //  invalid_feature_ids.size() << "/" <<
+  //这里的点分3种：还被跟到的、丢失的、新加的
+  ROS_DEBUG("removeLostFeatures | invalid/lost/all: %d / %d/ %d",
+	    invalid_feature_ids.size(),
+	    processed_feature_ids.size(),
+	    map_server.size());
+  ROS_DEBUG("removeLostFeatures | jacobian row #: %d",jacobian_row_size);
+  //cout << "invalid/processed feature #: "
+  //<<invalid_feature_ids.size() << "/" <<
   //  processed_feature_ids.size() << endl;
   //cout << "jacobian row #: " << jacobian_row_size << endl;
 
@@ -1164,7 +1214,7 @@ void MsckfVio::removeLostFeatures() {
   H_x.conservativeResize(stack_cntr, H_x.cols());
   r.conservativeResize(stack_cntr);
 
-  //
+  // publish lost features，用来debug
   publishLostFeatures(processed_feature_ids,cur_msg_timestamp);
   
   // Perform the measurement update step.
@@ -1180,14 +1230,16 @@ void MsckfVio::removeLostFeatures() {
 void MsckfVio::findRedundantCamStates(
     vector<StateIDType>& rm_cam_state_ids) {
 
-  //              first_cam                    key_cam  cam_state           current
-  //                  |                          |         |                   |
-  //sliding window:   x      x      x     x ...  x         x        x     x    x 
+  //              first_cam                    key_cam  cam_state       current
+  //                  |                          |         |              |
+  //sliding window:   x      x      x     x ...  x         x        x     x
   //                                              \        /        /
   //                                               \      /        /
-  //                                            检查位置变化      /       小：删除cam_state，大：删除first
+  //                                            检查位置变化      /       
   //                                                 \           /
-  //                                                 过小则检查这两个
+  //                                                 检查位置变化
+  // 位置变化：小-删除cam_state，大-删除first
+  // 注意：这里要找出两帧，然后marinalize
   
   // Move the iterator to the key position.
   auto key_cam_state_iter = state_server.cam_states.end();
@@ -1218,18 +1270,40 @@ void MsckfVio::findRedundantCamStates(
     //这里会不会有问题：旋转的时候视差很大，但是位移不一定能有0.4米，这时候应该marg的是first？
     //position：0.4
     //   angle：0.2618*57.3=15 deg，0.1745=10 deg
-    //tracking_rate是什么鬼？
+    //tracking_rate: 跟到的点占总点数的百分比
     //这里是不是该改成用视差来选取？
-    
-    //if (angle < 0.1745 && distance < 0.2 && tracking_rate > 0.5) {
+
+    ROS_DEBUG("findRedundantCamStates | window size: %d",state_server.cam_states.size());
+    ROS_DEBUG("findRedundantCamStates | angle/distance/tracking_rate: %.2f /%.2f /%.2f",
+	      angle*57.3f, distance, tracking_rate);
+
+#if 0
+    // 新的marginalize策略：旋转超过5度，或位移超过0.2米，或跟踪比例少于0.5，remove old
+    // 此处应该使用视差
+    // sliding window里的帧应该保持视差，像vins那样
+    if (angle > 0.09 || distance > 0.2 || tracking_rate < 0.5) {
+      //if (1) {
+      ROS_DEBUG("findRedundantCamStates | marginalize old of %d",state_server.cam_states.size());
+      rm_cam_state_ids.push_back(first_cam_state_iter->first);
+      ++first_cam_state_iter;
+
+    } else {
+      ROS_DEBUG("findRedundantCamStates | marginalize new of %d",state_server.cam_states.size());
+      rm_cam_state_ids.push_back(cam_state_iter->first);
+      ++cam_state_iter;
+    }
+#else
     if (angle < 0.2618 && distance < 0.4 && tracking_rate > 0.5) {
-    //if (angle < 0.02 && distance < 0.05) {
+    //if (0) {
+      ROS_DEBUG("findRedundantCamStates | marginalize new of %d",state_server.cam_states.size());
       rm_cam_state_ids.push_back(cam_state_iter->first);
       ++cam_state_iter;
     } else {
+      ROS_DEBUG("findRedundantCamStates | marginalize old of %d",state_server.cam_states.size());
       rm_cam_state_ids.push_back(first_cam_state_iter->first);
       ++first_cam_state_iter;
     }
+#endif
   }
 
   // Sort the elements in the output vector.
@@ -1261,13 +1335,21 @@ void MsckfVio::pruneCamStateBuffer() {
   vector<StateIDType> rm_cam_state_ids(0);
   findRedundantCamStates(rm_cam_state_ids);
 
+  // MarginalizedFrame
+  for(auto& cam_id : rm_cam_state_ids) {
+    auto cam_iter = state_server.cam_states.find(cam_id);
+    if(cam_iter != state_server.cam_states.end()) {
+      marginalized_states.push_back(cam_iter->second);
+    }
+  }
 
-  // 2.找出marignalized帧和当前帧的共视点，并把约束弱的点从观测中剔除
-  //   保留约束强的点(被2个或2个以上marinalized帧和当前帧同时观测到，并且成功能三角化)
+  // 2.找出marignalized帧和当前帧的共视点，并把约束弱的点从marinalized帧里剔除
+  //   约束弱的点：不能被所有marg帧都观察到，不能三角化，把maginalized帧从这个点的观测里剔除
+  //   约束强的点：被2个或2个以上marinalized帧和当前帧同时观测到，并且成功能三角化
   
   // Find the size of the Jacobian matrix.
   int jacobian_row_size = 0;
-
+  
   // 这一步的map_server:只包含当前帧还能跟踪的点和新点
   for (auto& item : map_server) {
     auto& feature = item.second;
@@ -1315,8 +1397,12 @@ void MsckfVio::pruneCamStateBuffer() {
     jacobian_row_size += 4*involved_cam_state_ids.size() - 3;
   }
 
-  //cout << "jacobian row #: " << jacobian_row_size << endl;
+  ROS_DEBUG("removeCameraStates | marginalize : %d",rm_cam_state_ids.size());
+  ROS_DEBUG("removeCameraStates | jacobian row #: %d",jacobian_row_size);
+  ROS_DEBUG("removeCameraStates | features all: %d",map_server.size());
 
+  
+  
   // 计算雅可比
   // Compute the Jacobian and residual.
   MatrixXd H_x = MatrixXd::Zero(jacobian_row_size,
@@ -1325,6 +1411,7 @@ void MsckfVio::pruneCamStateBuffer() {
   int stack_cntr = 0;
 
   // 3.计算每个feature和所有marnalized帧的雅可比，然后掐断该feature与这些帧的联系
+  vector<FeatureIDType> processed_feature_ids(0);
   for (auto& item : map_server) {
     auto& feature = item.second;
     // Check how many camera states to be removed are associated
@@ -1342,6 +1429,7 @@ void MsckfVio::pruneCamStateBuffer() {
     MatrixXd H_xj;
     VectorXd r_j;
     featureJacobian(feature.id, involved_cam_state_ids, H_xj, r_j);
+    processed_feature_ids.push_back(feature.id);
 
     if (gatingTest(H_xj, r_j, involved_cam_state_ids.size())) {
       H_x.block(stack_cntr, 0, H_xj.rows(), H_xj.cols()) = H_xj;
@@ -1356,9 +1444,12 @@ void MsckfVio::pruneCamStateBuffer() {
 
   H_x.conservativeResize(stack_cntr, H_x.cols());
   r.conservativeResize(stack_cntr);
-
-  // 4.kalman filter更新
   
+  // publish used features，用来debug
+  ROS_DEBUG("removeCameraStates | features used: %d",processed_feature_ids.size());
+  publishUsedFeatures(processed_feature_ids,cur_msg_timestamp);
+    
+  // 4.kalman filter更新
   // Perform measurement update.
   measurementUpdate(H_x, r);
 
@@ -1473,6 +1564,8 @@ void MsckfVio::publish(const ros::Time& time) {
   Eigen::Vector3d body_velocity =
     IMUState::T_imu_body.linear() * imu_state.velocity;
 
+
+  
   // Publish tf
   if (publish_tf) {
     tf::Transform T_b_w_tf;
@@ -1528,26 +1621,10 @@ void MsckfVio::publish(const ros::Time& time) {
   path.poses.push_back(pose_stamped);
   path_pub.publish(path);
 
-  // Publish the 3D positions of the features that
-  // has been initialized.
-#if 0
-  pcl::PointCloud<pcl::PointXYZ>::Ptr feature_msg_ptr( new pcl::PointCloud<pcl::PointXYZ>());
-  feature_msg_ptr->header.frame_id = fixed_frame_id;
-  feature_msg_ptr->height = 1;
-  for (const auto& item : map_server) {
-    const auto& feature = item.second;
-    if (feature.is_initialized) {
-      Vector3d feature_position =
-        IMUState::T_imu_body.linear() * feature.position;
-      feature_msg_ptr->points.push_back(pcl::PointXYZ(
-            feature_position(0), feature_position(1), feature_position(2)));
-    }
-  }
-  feature_msg_ptr->width = feature_msg_ptr->points.size();
-#else
+  // Publish the 3D positions of the features that has been initialized.
   sensor_msgs::PointCloud feature_msg;
   feature_msg.header = odom_msg.header;
-  //feature_msg.header.frame_id = fixed_frame_id;
+  int n = 0;
   for (const auto& item : map_server) {
     const auto& feature = item.second;
     if (feature.is_initialized) {
@@ -1557,10 +1634,65 @@ void MsckfVio::publish(const ros::Time& time) {
       p.y = feature_position[1];
       p.z = feature_position[2];
       feature_msg.points.push_back(p);
+      n++;
+      //feature_msg.channels.push_back(feature.first); //feature id
+      //feature_msg.channels.push_back();
+      //feature_msg.channels.push_back();
+      //feature_msg.channels.push_back();
     }
   }
   feature_pub.publish(feature_msg);
-#endif
+  ROS_DEBUG("publish | feature size:%d",n);
+  
+
+  //publish sliding window
+  // 整个sliding window
+  nav_msgs::Path path_window;  //sliding window
+  path_window.header.stamp = time;
+  path_window.header.frame_id = "world";
+  auto cam_state_iter = state_server.cam_states.begin();
+  for (int i = 0; i < state_server.cam_states.size(); i++, cam_state_iter++) {
+    geometry_msgs::PoseStamped pose_window;
+    pose_window.header.stamp = ros::Time(0,0)+ros::Duration(cam_state_iter->second.time);
+    pose_window.header.frame_id = "world";
+    pose_window.pose.position.x = cam_state_iter->second.position[0];
+    pose_window.pose.position.y = cam_state_iter->second.position[1];
+    pose_window.pose.position.z = cam_state_iter->second.position[2];
+    pose_window.pose.orientation.x = cam_state_iter->second.orientation[0];
+    pose_window.pose.orientation.y = cam_state_iter->second.orientation[1];
+    pose_window.pose.orientation.z = cam_state_iter->second.orientation[2];
+    pose_window.pose.orientation.w = cam_state_iter->second.orientation[3];
+
+    if(0 == i) {
+      //sliding window里最早帧的轨迹
+      path_window0.header = path_window.header;
+      path_window0.header.frame_id = "world";
+      path_window0.poses.push_back(pose_window);
+    }
+    path_window.poses.push_back(pose_window);
+  }
+  path_window0_pub.publish(path_window0);
+  path_window_pub.publish(path_window);
+
+  // publish 边缘化删除的帧
+  nav_msgs::Path path_marginalize;
+  path_marginalize.header.stamp = time;
+  path_marginalize.header.frame_id = "world";
+  for (const auto& cam_state : marginalized_states) {
+    geometry_msgs::PoseStamped pose;
+    pose.header.stamp = ros::Time(0,0)+ros::Duration(cam_state_iter->second.time);
+    pose.header.frame_id = "world";
+    pose.pose.position.x = cam_state.position[0];
+    pose.pose.position.y = cam_state.position[1];
+    pose.pose.position.z = cam_state.position[2];
+    pose.pose.orientation.x = cam_state.orientation[0];
+    pose.pose.orientation.y = cam_state.orientation[1];
+    pose.pose.orientation.z = cam_state.orientation[2];
+    pose.pose.orientation.w = cam_state.orientation[3];
+    path_marginalize.poses.push_back(pose);
+  }
+  marg_frames_pub.publish(path_marginalize);
+  marginalized_states.clear();
 
   return;
 }
