@@ -4,10 +4,10 @@
 
   <arg name="fixed_frame_id" default="world"/>
   <arg name="calibration_file"
-    default="$(find msckf_vio)/config/camchain-imucam-100t5.yaml"/>
+    default="$(find msckf_vio)/config/camchain-imucam-100t6.yaml"/>
 
   <!-- Image Processor Nodelet  -->
-   <include file="$(find msckf_vio)/launch/image_processor_100t5.launch">
+   <include file="$(find msckf_vio)/launch/image_processor_100t6.launch">
     <arg name="calibration_file" value="$(arg calibration_file)"/>
   </include>
 
@@ -34,12 +34,12 @@
       <param name="feature/config/translation_threshold" value="-1.0"/>
 
       <!-- These values should be standard deviation -->
-      <param name="noise/gyro" value="0.0015"/>
-      <param name="noise/acc" value="0.037"/>
+      <param name="noise/gyro" value="0.01"/>
+      <param name="noise/acc" value="0.05"/>
       <param name="noise/gyro_bias" value="0.00006"/>
       <param name="noise/acc_bias" value="0.002"/>
       <!--param name="noise/feature" value="0.035"/-->
-      <param name="noise/feature" value="0.035"/>
+      <param name="noise/feature" value="0.167"/>
 
       <param name="initial_state/velocity/x" value="0.0"/>
       <param name="initial_state/velocity/y" value="0.0"/>

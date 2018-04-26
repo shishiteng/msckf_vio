@@ -310,6 +310,10 @@ void ImageProcessor::createImagePyramids() {
       Size(processor_config.patch_size, processor_config.patch_size),
       processor_config.pyramid_levels, true, BORDER_REFLECT_101,
       BORDER_CONSTANT, false);
+
+  //cout<<"pyramid size:"<<curr_cam0_pyramid_.size()<<endl;
+  //cout<<"level 0 size:"<<curr_cam0_pyramid_[0].size()<<endl;
+  //cout<<"level 1 size:"<<curr_cam0_pyramid_[2].size()<<endl;
 }
 
 void ImageProcessor::initializeFirstFrame() {
@@ -457,6 +461,8 @@ void ImageProcessor::trackFeatures() {
   Mat draw_img;
   if(debug_tracking) {
     cvtColor(cam0_prev_img_ptr->image,draw_img, CV_GRAY2RGB);
+    
+    ros::Time ss = ros::Time::now();
     vector<Point2f> curr_cam0_points2(0);
     vector<unsigned char> track_inliers2(0);
     calcOpticalFlowPyrLK(
@@ -468,6 +474,7 @@ void ImageProcessor::trackFeatures() {
 			 TermCriteria(TermCriteria::COUNT+TermCriteria::EPS,
 				      processor_config.max_iteration,
 				      processor_config.track_precision));
+    ROS_DEBUG("pyrLK cost: %f",(ros::Time::now()-ss).toSec());
     
     int nTrack = 0;
     for(int i=0;i<prev_cam0_points.size();i++) {
@@ -512,7 +519,7 @@ void ImageProcessor::trackFeatures() {
 		       cv::OPTFLOW_USE_INITIAL_FLOW);
 
   
-  ROS_DEBUG("trackFeatures | calcOpticalFlowPyrLK : %f",(ros::Time::now()-start_time).toSec());
+  ROS_DEBUG("trackFeatures | gyro-aided calcOpticalFlowPyrLK : %f",(ros::Time::now()-start_time).toSec());
   
   // Mark those tracked points out of the image region
   // as untracked.
@@ -539,8 +546,9 @@ void ImageProcessor::trackFeatures() {
     sprintf(str, "gyro-LK track: %d / %d  (%.2f)", nTrack, prev_cam0_points.size(), (float)nTrack/prev_cam0_points.size());
     putText(draw_img, str, Point2f(10,25), cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 255, 0));
     putText(draw_img, "b/g/r:  predict/imu-klt/klt", Point2f(10,40), cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 255, 0));
-  
-    resize(draw_img,draw_img,draw_img.size()*2);
+
+    
+    //resize(draw_img,draw_img,draw_img.size()*2);
     imshow("predict points",draw_img);
     waitKey(1);
   }
@@ -830,6 +838,8 @@ void ImageProcessor::addNewFeatures() {
   vector<unsigned char> inlier_markers(0);
   stereoMatch(cam0_points, cam1_points, inlier_markers);
 
+  //cout<<"cam0 pts:"<<cam0_points.size()<<endl;
+  
   vector<cv::Point2f> cam0_inliers(0);
   vector<cv::Point2f> cam1_inliers(0);
   vector<float> response_inliers(0);
@@ -972,6 +982,9 @@ vector<cv::Point2f> ImageProcessor::distortPoints(
     cv::convertPointsToHomogeneous(pts_in, homogenous_pts);
     cv::projectPoints(homogenous_pts, cv::Vec3d::zeros(), cv::Vec3d::zeros(), K,
                       distortion_coeffs, pts_out);
+    //homo:[-0.0718182, -0.238471]   [-0.0718182, -0.238471, 1]  [288.385, 78.5858]
+    //cout<<"homo:"<<pts_in[0]<<"   "<<homogenous_pts[0]<<"  "<<pts_out[0]<<endl;
+    
   } else if (distortion_model == "equidistant") {
     cv::fisheye::distortPoints(pts_in, pts_out, K, distortion_coeffs);
   } else {
@@ -1312,6 +1325,8 @@ void ImageProcessor::publish() {
 
   for (const auto& grid_features : (*curr_features_ptr)) {
     for (const auto& feature : grid_features.second) {
+      //if(feature.cam0_point.y > 240.0) continue;
+      //cout<<feature.cam0_point<<endl;
       curr_ids.push_back(feature.id);
       curr_cam0_points.push_back(feature.cam0_point);
       curr_cam1_points.push_back(feature.cam1_point);
@@ -1328,8 +1343,60 @@ void ImageProcessor::publish() {
       curr_cam1_points, cam1_intrinsics, cam1_distortion_model,
       cam1_distortion_coeffs, curr_cam1_points_undistorted);
 
+  Eigen::Isometry3d T_cam0_cam1 = utils::getTransformEigen(nh, "cam1/T_cn_cnm1");
+  Eigen::Isometry3d T_cam1_cam0 = T_cam0_cam1.inverse();
+#if 0
+  cv::Mat show(960,1280,cam0_curr_img_ptr->image.type());
+  show.setTo(cv::Scalar(255,255,255));
+  cam0_curr_img_ptr->image.copyTo(show(cv::Rect(0,0,640,480)));
+  cam1_curr_img_ptr->image.copyTo(show(cv::Rect(640,0,640,480)));
+  cvtColor(show,show,CV_GRAY2RGB);
+  for (int i = 0; i < curr_ids.size(); ++i) {
+    Eigen::Vector3d vec(curr_cam0_points_undistorted[i].x,curr_cam0_points_undistorted[i].y,1);
+    Eigen::Vector3d vec_(curr_cam1_points_undistorted[i].x,curr_cam1_points_undistorted[i].y,1);
+    //Eigen::Vector3d vec1=T_cam1_cam0*curr_cam1_points_undistorted[i];
+    Eigen::Vector3d vec1=T_cam1_cam0.linear()*vec_;
+    cv::Point2f p0(vec[0]+3.2,vec[1]+2.4);
+    p0=p0*100+cv::Point2f(0,480);
+    cv::Point2f p1(vec1[0]/vec1[2]+3.2,vec1[1]/vec1[2]+2.4);
+    p1=p1*100+cv::Point2f(640,480);
+
+    if(p1.x-640 > p0.x) {
+      circle(show, p0, 3, Scalar(0,0,255));
+      circle(show, p1, 3, Scalar(0,0,255));
+    }else if (fabs(p1.y-p0.y) > 2) {
+      circle(show, p0, 3, Scalar(255,0,0));
+      circle(show, p1, 3, Scalar(255,0,0));
+    }else {
+      circle(show, p0, 3, Scalar(0,255,0));
+      circle(show, p1, 3, Scalar(0,255,0));
+    }
+
+    line(show, p0, p1-Point2f(640,0), Scalar(0,255,0), 1);
+  }
+
+  imshow("show",show);
+  waitKey(1);
+    
+#endif
+  
+  int n =0;
   for (int i = 0; i < curr_ids.size(); ++i) {
     feature_msg_ptr->features.push_back(FeatureMeasurement());
+    
+#if 0
+    Eigen::Vector3d vec(curr_cam0_points_undistorted[i].x,curr_cam0_points_undistorted[i].y,1);
+    Eigen::Vector3d vec_(curr_cam1_points_undistorted[i].x,curr_cam1_points_undistorted[i].y,1);
+    //Eigen::Vector3d vec1=T_cam1_cam0*curr_cam1_points_undistorted[i];
+    Eigen::Vector3d vec1=T_cam1_cam0.linear()*vec_;
+    cv::Point2f p0(vec[0]+3.2,vec[1]+2.4);
+    p0=p0*100+cv::Point2f(0,480);
+    cv::Point2f p1(vec1[0]/vec1[2]+3.2,vec1[1]/vec1[2]+2.4);
+    p1=p1*100+cv::Point2f(640,480);
+    if(p1.x-640 > p0.x || fabs(p1.y-p0.y) > 2)
+      continue;
+#endif
+    
     feature_msg_ptr->features[i].id = curr_ids[i];
     feature_msg_ptr->features[i].u0 = curr_cam0_points_undistorted[i].x;
     feature_msg_ptr->features[i].v0 = curr_cam0_points_undistorted[i].y;
@@ -1531,6 +1598,9 @@ void ImageProcessor::drawFeaturesStereo() {
         circle(out_img, curr_pt1, 3, tracked, -1);
         line(out_img, prev_pt0, curr_pt0, tracked, 1);
         line(out_img, prev_pt1, curr_pt1, tracked, 1);
+
+	//左右目的跟踪也画出来
+	line(out_img, curr_pt0, curr_cam1_points[id], Scalar(0,0,255), 1);
 
         prev_cam0_points.erase(id);
         prev_cam1_points.erase(id);

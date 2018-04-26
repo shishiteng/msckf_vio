@@ -208,7 +208,8 @@ bool MsckfVio::initialize() {
   if (!loadParameters()) return false;
   ROS_INFO("Finish loading ROS parameters...");
 
-  ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Debug);
+  //ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Debug);
+  ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info);
   
   // Initialize state server
   state_server.continuous_noise_cov =
@@ -939,6 +940,9 @@ void MsckfVio::featureJacobian(
 void MsckfVio::measurementUpdate(
     const MatrixXd& H, const VectorXd& r) {
 
+  ros::Time start_time = ros::Time::now();
+
+  
   if (H.rows() == 0 || r.rows() == 0) return;
 
   // Decompose the final Jacobian matrix to reduce computational
@@ -1037,6 +1041,8 @@ void MsckfVio::measurementUpdate(
       state_server.state_cov.transpose()) / 2.0;
   state_server.state_cov = state_cov_fixed;
 
+  ROS_DEBUG("----------- | measurementUpdate: %f",(ros::Time::now()-start_time).toSec());
+    
   return;
 }
 
@@ -1230,9 +1236,9 @@ void MsckfVio::removeLostFeatures() {
 void MsckfVio::findRedundantCamStates(
     vector<StateIDType>& rm_cam_state_ids) {
 
-  //              first_cam                    key_cam  cam_state       current
-  //                  |                          |         |              |
-  //sliding window:   x      x      x     x ...  x         x        x     x
+  //              first_cam                    key_cam  cam_state            current
+  //                  |                          |         |                    |
+  //sliding window:   x      x      x     x ...  x         x        x     x     x
   //                                              \        /        /
   //                                               \      /        /
   //                                            检查位置变化      /       
@@ -1314,12 +1320,12 @@ void MsckfVio::findRedundantCamStates(
 
 /*                         feature
  *                        / /  |  
- *                     /   /  /|  
- *                  /    /   / |
- *                /    /    /  |  
- *             /      /    /   |  
- *          /       /     /    |  
- * frame  f0       f1    f2   fn
+ *                     /   //  |  
+ *                  /    / //  |
+ *                /    /  / /  |  
+ *             /      /  /  /  |  
+ *          /       /   /   /  |  
+ * frame  f0       f1   f2 f3  fn
  *         |       |           |
  *     marg0    marg1          |
  *         |       |           |

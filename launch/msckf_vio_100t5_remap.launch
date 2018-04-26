@@ -4,10 +4,10 @@
 
   <arg name="fixed_frame_id" default="world"/>
   <arg name="calibration_file"
-    default="$(find msckf_vio)/config/camchain-imucam-100t5.yaml"/>
+    default="$(find msckf_vio)/config/camchain-imucam-100t5-remap.yaml"/>
 
   <!-- Image Processor Nodelet  -->
-   <include file="$(find msckf_vio)/launch/image_processor_100t5.launch">
+   <include file="$(find msckf_vio)/launch/image_processor_100t5_remap.launch">
     <arg name="calibration_file" value="$(arg calibration_file)"/>
   </include>
 
