@@ -49,6 +49,18 @@ Feature::OptimizationConfig Feature::optimization_config;
 
 map<int, double> MsckfVio::chi_squared_test_table;
 
+double calcPathDistance(nav_msgs::Path &_path)
+{
+  double ret = 0;
+  for(size_t i=1;i<_path.poses.size();++i){
+    ret+=std::sqrt((_path.poses[i].pose.position.x-_path.poses[i-1].pose.position.x)*(_path.poses[i].pose.position.x-_path.poses[i-1].pose.position.x)
+		   +(_path.poses[i].pose.position.y-_path.poses[i-1].pose.position.y)*(_path.poses[i].pose.position.y-_path.poses[i-1].pose.position.y)
+		   +(_path.poses[i].pose.position.z-_path.poses[i-1].pose.position.z)*(_path.poses[i].pose.position.z-_path.poses[i-1].pose.position.z));
+  }
+  return ret;
+}
+
+  
 MsckfVio::MsckfVio(ros::NodeHandle& pnh):
   is_gravity_set(false),
   is_first_img(true),
@@ -527,26 +539,56 @@ void MsckfVio::mocapOdomCallback(
   return;
 }
 
+Vector3d last_gyro, last_acc;
+double last_time = 0.0;
+  
 void MsckfVio::batchImuProcessing(const double& time_bound) {
+#if 1
   // Counter how many IMU msgs in the buffer are used.
   int used_imu_msg_cntr = 0;
 
+  //printf("imu_state time:%.9f\n",state_server.imu_state.time);
+  //printf("image time:%.9f\n",time_bound);
+  
+  bool finish_flag = false;
   for (const auto& imu_msg : imu_msg_buffer) {
     double imu_time = imu_msg.header.stamp.toSec();
     if (imu_time < state_server.imu_state.time) {
       ++used_imu_msg_cntr;
       continue;
     }
-    if (imu_time > time_bound) break;
 
     // Convert the msgs.
     Vector3d m_gyro, m_acc;
     tf::vectorMsgToEigen(imu_msg.angular_velocity, m_gyro);
     tf::vectorMsgToEigen(imu_msg.linear_acceleration, m_acc);
+    
+    // 插值
+    if (imu_time > time_bound) {
+      double t0 = last_time;
+      double t1 = imu_time;
+      double t  = time_bound;
+      m_gyro = ((t-t0)*m_gyro + (t1-t)*last_gyro)/(t1-t0);
+      m_acc  = ((t-t0)*m_acc  + (t1-t)*last_acc )/(t1-t0);
+      imu_time = time_bound;
+      //printf("  imu time:%.9f   ------\n",imu_time);
+      finish_flag = true;
+    } else {
+      //printf("  imu time:%.9f\n",imu_time);
+      ++used_imu_msg_cntr;
+    }
 
+    
     // Execute process model.
     processModel(imu_time, m_gyro, m_acc);
-    ++used_imu_msg_cntr;
+    //processModel(imu_time, (m_gyro+last_gyro)/2, (m_acc+last_acc)/2); //传播状态时用两帧imu的均值
+
+    last_time = imu_time;
+    last_gyro = m_gyro;
+    last_acc  = m_acc;
+    
+    if(finish_flag)
+      break;
   }
 
   // Set the state ID for the new IMU state.
@@ -555,7 +597,48 @@ void MsckfVio::batchImuProcessing(const double& time_bound) {
   // Remove all used IMU msgs.
   imu_msg_buffer.erase(imu_msg_buffer.begin(),
       imu_msg_buffer.begin()+used_imu_msg_cntr);
+#else
+  int used_imu_msg_cntr = 0;
+  //printf("image time:%.9f\n",state_server.imu_state.time);
+  printf("image time:%.9f\n",time_bound);
 
+  
+  for (const auto& imu_msg : imu_msg_buffer) {
+    double imu_time = imu_msg.header.stamp.toSec();
+    if (imu_time < state_server.imu_state.time) {
+      ++used_imu_msg_cntr;
+      continue;
+    }
+    if (imu_time > time_bound) break;
+
+    printf("  imu time:%.9f\n",imu_time);
+    
+    // Convert the msgs.
+    Vector3d m_gyro, m_acc;
+    tf::vectorMsgToEigen(imu_msg.angular_velocity, m_gyro);
+    tf::vectorMsgToEigen(imu_msg.linear_acceleration, m_acc);
+
+    // Execute process model.
+    Vector3d mean_gyro, mean_acc;
+    mean_gyro = (m_gyro + last_gyro)/2.;
+    mean_acc  = (m_acc  + last_acc)/2.;
+    
+    //processModel(imu_time, m_gyro, m_acc);
+    processModel(imu_time, mean_gyro, mean_acc);
+    ++used_imu_msg_cntr;
+    
+    last_gyro = m_gyro;
+    last_acc  = m_acc;
+  }
+
+  // Set the state ID for the new IMU state.
+  state_server.imu_state.id = IMUState::next_id++;
+
+  // Remove all used IMU msgs.
+  imu_msg_buffer.erase(imu_msg_buffer.begin(),
+		       imu_msg_buffer.begin()+used_imu_msg_cntr);
+#endif
+  
   return;
 }
 
@@ -1627,6 +1710,9 @@ void MsckfVio::publish(const ros::Time& time) {
   path.poses.push_back(pose_stamped);
   path_pub.publish(path);
 
+    ROS_INFO("position:(%f, %f, %f)  distance:%.1f\n",odom_msg.pose.pose.position.x,odom_msg.pose.pose.position.y,odom_msg.pose.pose.position.z,calcPathDistance(path));
+
+    
   // Publish the 3D positions of the features that has been initialized.
   sensor_msgs::PointCloud feature_msg;
   feature_msg.header = odom_msg.header;

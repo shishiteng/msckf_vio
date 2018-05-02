@@ -23,6 +23,66 @@ using namespace std;
 using namespace cv;
 using namespace Eigen;
 
+
+void checkWithORB(Mat image0,Mat image1,vector<Point2f> prevPts,vector<Point2f> nextPts,vector<unsigned char> &inliers)
+{
+  if(image0.empty() || image1.empty()) {
+    fprintf(stderr,"image emtpy.\n");
+    return;
+  }
+
+  if(prevPts.size() == 0 || nextPts.size() == 0 || prevPts.size() != nextPts.size()) {
+    fprintf(stderr,"points size error.\n");
+    return;
+  }
+
+  for(int i=0;i<nextPts.size();i++) {
+    if (nextPts[i].y < 0 ||
+        nextPts[i].x < 0 ||
+	nextPts[i].y > image0.rows-1 ||
+        nextPts[i].x > image0.cols-1)
+      nextPts[i] = Point2f(0,0);
+  }
+  
+  vector<KeyPoint> keyPoints_1, keyPoints_2;
+  Mat descriptors_1, descriptors_2;
+  KeyPoint::convert(prevPts,keyPoints_1);
+  KeyPoint::convert(nextPts,keyPoints_2);
+
+  //fprintf(stderr,"1\n");
+    
+  Ptr<ORB> orb = ORB::create(200, 1.2f, 8, 0, 0, 2, ORB::FAST_SCORE, 21, 1);
+  //fprintf(stderr,".");
+  orb->compute(image0, keyPoints_1, descriptors_1);
+  //fprintf(stderr,".\n");
+  //fprintf(stderr,"%d %d %d %d\n",prevPts.size(),nextPts.size(),keyPoints_1.size(),keyPoints_2.size());
+  //imshow("image1",image1);
+  //waitKey(0);
+  orb->compute(image1, keyPoints_2, descriptors_2);
+
+  //fprintf(stderr,"2\n");
+  
+  if(keyPoints_1.size() != prevPts.size() || keyPoints_2.size() != nextPts.size()) {
+    fprintf(stderr,"size error:points to keyPoint failed\n");
+    return;
+  }
+  
+  BFMatcher matcher(NORM_HAMMING);
+  vector<DMatch> matches;
+  matcher.match(descriptors_1, descriptors_2, matches);
+
+  //fprintf(stderr,"3\n");
+    
+  for( int i = 0; i < descriptors_1.rows; i++ ) {
+    //cout<< i<<" pt: "<<prevPts[i]<<"  "<<nextPts[i]<<" d="<<matches[i].distance<<endl;
+    cv::Point2f pt_1 = keyPoints_1[ matches[i].queryIdx ].pt;
+    cv::Point2f pt_2 = keyPoints_2[ matches[i].trainIdx ].pt;
+    cv::Point2f pt_2_org = keyPoints_2[ matches[i].queryIdx ].pt;
+    if(pt_2 != pt_2_org || matches[i].distance > 25)
+      inliers[i] = 0;
+  }
+}
+
 namespace msckf_vio {
 ImageProcessor::ImageProcessor(ros::NodeHandle& n) :
   nh(n),
@@ -520,6 +580,11 @@ void ImageProcessor::trackFeatures() {
 
   
   ROS_DEBUG("trackFeatures | gyro-aided calcOpticalFlowPyrLK : %f",(ros::Time::now()-start_time).toSec());
+
+  //fprintf(stderr,"qianhou\n");
+  checkWithORB(cam0_prev_img_ptr->image, cam0_curr_img_ptr->image,
+	       prev_cam0_points, curr_cam0_points,
+	       track_inliers);
   
   // Mark those tracked points out of the image region
   // as untracked.
@@ -716,6 +781,12 @@ void ImageProcessor::stereoMatch(
                    processor_config.track_precision),
       cv::OPTFLOW_USE_INITIAL_FLOW);
 
+  //fprintf(stderr,"stereo\n");
+  
+  checkWithORB(cam0_curr_img_ptr->image, cam1_curr_img_ptr->image,
+	       cam0_points, cam1_points,
+	       inlier_markers);
+    
   // Mark those tracked points out of the image region
   // as untracked.
   for (int i = 0; i < cam1_points.size(); ++i) {
