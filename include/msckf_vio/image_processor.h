@@ -322,6 +322,20 @@ private:
     return;
   }
 
+  // remove outliers by stereo matching
+  void checkWithStereo(std::vector<cv::Point2f> cam0_points,
+		       std::vector<cv::Point2f> cam1_points,
+		       std::vector<unsigned char> &inliers,
+		       std::vector<cv::Point2f> &outlier_points);
+
+  // remove outliers by orb matching
+  void checkWithORB(cv::Mat image0,
+		    cv::Mat image1,
+		    std::vector<cv::Point2f> prevPts,
+		    std::vector<cv::Point2f> nextPts,
+		    std::vector<unsigned char> &inliers,
+		    std::vector<cv::Point2f> &outlier_points);
+
   // Indicate if this is the first image message.
   bool is_first_img;
 
@@ -395,6 +409,9 @@ private:
   void featureLifetimeStatistics();
 
   camodocal::CameraPtr m_camera;
+
+  std::vector<cv::Point2f> orb_outliers;
+  std::vector<cv::Point2f> stereo_outliers;
 };
 
 typedef ImageProcessor::Ptr ImageProcessorPtr;
