@@ -132,6 +132,8 @@ bool ImageProcessor::loadParameters() {
   nh.param<int>("debug_tracking",processor_config.debug_tracking, 0);
   nh.param<int>("check_orb",processor_config.check_orb, 0);
   nh.param<int>("check_stereo",processor_config.check_stereo, 0);
+  nh.param<int>("check_circle",processor_config.check_circle, 0);
+  nh.param<int>("check_ransac",processor_config.check_ransac, 0);
 
   ROS_INFO("===========================================");
   ROS_INFO("cam0_resolution: %d, %d",
@@ -183,7 +185,9 @@ bool ImageProcessor::loadParameters() {
       processor_config.stereo_threshold);
   ROS_INFO("debug_tracking: %d",processor_config.debug_tracking);
   ROS_INFO("check_orb: %d",processor_config.check_orb);
+  ROS_INFO("check_circle: %d",processor_config.check_circle);
   ROS_INFO("check_stereo: %d",processor_config.check_stereo);
+  ROS_INFO("check_ransac: %d",processor_config.check_ransac);
   ROS_INFO("===========================================");
   return true;
 }
@@ -236,6 +240,7 @@ void ImageProcessor::stereoCallback(const sensor_msgs::ImageConstPtr& cam0_img,c
   // clear outliers buffer
   orb_outliers.clear();
   stereo_outliers.clear();
+  circle_outliers.clear();
 
   // Get the current image.
   cam0_curr_img_ptr = cv_bridge::toCvShare(cam0_img, sensor_msgs::image_encodings::MONO8);
@@ -290,8 +295,10 @@ void ImageProcessor::stereoCallback(const sensor_msgs::ImageConstPtr& cam0_img,c
 
   // Update the previous image and previous features.
   cam0_prev_img_ptr = cam0_curr_img_ptr;
+  cam1_prev_img_ptr = cam1_curr_img_ptr;
   prev_features_ptr = curr_features_ptr;
   std::swap(prev_cam0_pyramid_, curr_cam0_pyramid_);
+  std::swap(prev_cam1_pyramid_, curr_cam1_pyramid_);
 
   // Initialize the current features to empty vectors.
   curr_features_ptr.reset(new GridFeatures());
@@ -546,6 +553,15 @@ void ImageProcessor::trackFeatures() {
     //printf("trackFeatures:orb outliers:%d\n",orb_outliers.size());
   }
 
+  // circle match:进一步剔除outlier
+  if(processor_config.check_circle) {
+    vector<uchar> circle_inliers(prev_cam0_points.size(),1);
+    checkWithCircle(prev_cam0_points,
+		    curr_cam0_points,
+		    track_inliers,
+		    circle_outliers);
+  }
+    
 
   // Mark those tracked points out of the image region
   // as untracked.
@@ -596,6 +612,7 @@ void ImageProcessor::trackFeatures() {
       prev_cam1_points, track_inliers, prev_tracked_cam1_points);
   removeUnmarkedElements(
       curr_cam0_points, track_inliers, curr_tracked_cam0_points);
+
 
   // Number of features left after tracking.
   after_tracking = curr_tracked_cam0_points.size();
@@ -649,41 +666,60 @@ void ImageProcessor::trackFeatures() {
   // Number of features left after stereo matching.
   after_matching = curr_matched_cam0_points.size();
 
-  // Step 2 and 3: RANSAC on temporal image pairs of cam0 and cam1.
-  start_time = ros::Time::now();
-  vector<int> cam0_ransac_inliers(0);
-  twoPointRansac(prev_matched_cam0_points, curr_matched_cam0_points,
-      cam0_R_p_c, cam0_intrinsics, cam0_distortion_model,
-      cam0_distortion_coeffs, processor_config.ransac_threshold,
-      0.99, cam0_ransac_inliers);
-
-  vector<int> cam1_ransac_inliers(0);
-  twoPointRansac(prev_matched_cam1_points, curr_matched_cam1_points,
-      cam1_R_p_c, cam1_intrinsics, cam1_distortion_model,
-      cam1_distortion_coeffs, processor_config.ransac_threshold,
-      0.99, cam1_ransac_inliers);
-  ROS_DEBUG("trackFeatures | twoPointRansac : %f",(ros::Time::now()-start_time).toSec());
-  
-  // Number of features after ransac.
   after_ransac = 0;
+  if(processor_config.check_ransac) {
+    // Step 2 and 3: RANSAC on temporal image pairs of cam0 and cam1.
+    start_time = ros::Time::now();
+    vector<int> cam0_ransac_inliers(0);
+    twoPointRansac(prev_matched_cam0_points, curr_matched_cam0_points,
+		   cam0_R_p_c, cam0_intrinsics, cam0_distortion_model,
+		   cam0_distortion_coeffs, processor_config.ransac_threshold,
+		   0.99, cam0_ransac_inliers);
 
-  for (int i = 0; i < cam0_ransac_inliers.size(); ++i) {
-    if (cam0_ransac_inliers[i] == 0 ||
-        cam1_ransac_inliers[i] == 0) continue;
-    int row = static_cast<int>(
-        curr_matched_cam0_points[i].y / grid_height);
-    int col = static_cast<int>(
-        curr_matched_cam0_points[i].x / grid_width);
-    int code = row*processor_config.grid_col + col;
-    (*curr_features_ptr)[code].push_back(FeatureMetaData());
+    vector<int> cam1_ransac_inliers(0);
+    twoPointRansac(prev_matched_cam1_points, curr_matched_cam1_points,
+		   cam1_R_p_c, cam1_intrinsics, cam1_distortion_model,
+		   cam1_distortion_coeffs, processor_config.ransac_threshold,
+		   0.99, cam1_ransac_inliers);
+    ROS_DEBUG("trackFeatures | twoPointRansac : %f",(ros::Time::now()-start_time).toSec());
 
-    FeatureMetaData& grid_new_feature = (*curr_features_ptr)[code].back();
-    grid_new_feature.id = prev_matched_ids[i];
-    grid_new_feature.lifetime = ++prev_matched_lifetime[i];
-    grid_new_feature.cam0_point = curr_matched_cam0_points[i];
-    grid_new_feature.cam1_point = curr_matched_cam1_points[i];
+    // Number of features after ransac.
+    after_ransac = 0;
 
-    ++after_ransac;
+    for (int i = 0; i < cam0_ransac_inliers.size(); ++i) {
+      if (cam0_ransac_inliers[i] == 0 ||
+	  cam1_ransac_inliers[i] == 0) continue;
+      int row = static_cast<int>(
+				 curr_matched_cam0_points[i].y / grid_height);
+      int col = static_cast<int>(
+				 curr_matched_cam0_points[i].x / grid_width);
+      int code = row*processor_config.grid_col + col;
+      (*curr_features_ptr)[code].push_back(FeatureMetaData());
+
+      FeatureMetaData& grid_new_feature = (*curr_features_ptr)[code].back();
+      grid_new_feature.id = prev_matched_ids[i];
+      grid_new_feature.lifetime = ++prev_matched_lifetime[i];
+      grid_new_feature.cam0_point = curr_matched_cam0_points[i];
+      grid_new_feature.cam1_point = curr_matched_cam1_points[i];
+
+      ++after_ransac;
+    }
+    
+  } else {
+    for (int i = 0; i < curr_matched_cam0_points.size(); ++i) {
+      int row = static_cast<int>(curr_matched_cam0_points[i].y / grid_height);
+      int col = static_cast<int>(curr_matched_cam0_points[i].x / grid_width);
+      int code = row*processor_config.grid_col + col;
+      (*curr_features_ptr)[code].push_back(FeatureMetaData());
+
+      FeatureMetaData& grid_new_feature = (*curr_features_ptr)[code].back();
+      grid_new_feature.id = prev_matched_ids[i];
+      grid_new_feature.lifetime = ++prev_matched_lifetime[i];
+      grid_new_feature.cam0_point = curr_matched_cam0_points[i];
+      grid_new_feature.cam1_point = curr_matched_cam1_points[i];
+
+      ++after_ransac;
+    }
   }
 
   // Compute the tracking rate.
@@ -1571,6 +1607,7 @@ void ImageProcessor::drawFeaturesStereo() {
     Scalar new_feature(0, 255, 255);
     Scalar outlier_orb(0, 0, 255);
     Scalar outlier_stereo(255, 0, 255);
+    Scalar outlier_circle(255, 255, 0);
     
 
     static int grid_height = cam0_curr_img_ptr->image.rows / processor_config.grid_row;
@@ -1665,6 +1702,12 @@ void ImageProcessor::drawFeaturesStereo() {
     for (const auto& outlier_point : stereo_outliers) {
       cv::Point2f pt = outlier_point;
       circle(out_img, pt, 3, outlier_stereo, -1);//thickness of line:1
+    }
+
+    // draw outliers which removed by cicle match
+    for (const auto& outlier_point : circle_outliers) {
+      cv::Point2f pt = outlier_point;
+      circle(out_img, pt, 3, outlier_circle, -1);//thickness of line:1
     }
     
     // Draw new features.
@@ -1830,6 +1873,121 @@ void ImageProcessor::checkWithORB(Mat image0,
       outlier_points.push_back(prevPts[i]);
     }
   }
+}
+
+bool isNotSame(cv::Point2f p1, cv::Point2f p2)
+{
+  return(fabsf(p1.x-p2.x)>0.3 || fabsf(p1.y-p2.y)>0.3);
+}
+  
+void ImageProcessor::checkWithCircle(vector<Point2f> prev_pts0,
+				     vector<Point2f> curr_pts0,
+				     vector<unsigned char> &inliers,
+				     std::vector<cv::Point2f> &outlier_points)
+{
+  // curr_img0 <--- curr_img1
+  //    |                ^
+  //  match              |
+  //    |                |
+  // prev_img0 ---> prev_img1
+
+  if(prev_cam0_pyramid_.size() ==0 || prev_cam1_pyramid_.size() ==0)
+    return;
+      
+  
+  vector<unsigned char> status;
+  vector<unsigned char> status_outlier(prev_pts0.size(),1);
+  vector<Point2f> prev_cam0_points;
+  vector<Point2f> prev_cam1_points;
+  vector<Point2f> curr_cam0_points;
+  vector<Point2f> curr_cam1_points;
+  
+  // 1.prev0 -->  prev1
+  calcOpticalFlowPyrLK(prev_cam0_pyramid_, prev_cam1_pyramid_,
+		       prev_pts0, prev_cam1_points,
+		       status, noArray(),
+		       Size(processor_config.patch_size, processor_config.patch_size),
+		       processor_config.pyramid_levels,
+		       TermCriteria(TermCriteria::COUNT+TermCriteria::EPS,
+				    processor_config.max_iteration,
+				    processor_config.track_precision));
+  for(int i=0;i<status.size();i++) {
+    if (status[i] == 0 && inliers[i] != 0) {
+      status_outlier[i] = 0;
+      //fprintf(stderr,"1\n");
+    }
+  }
+  status.clear();
+
+  // 2.prev1 --> curr1
+  calcOpticalFlowPyrLK(prev_cam1_pyramid_, curr_cam1_pyramid_,
+		       prev_cam1_points, curr_cam1_points,
+		       status, noArray(),
+		       Size(processor_config.patch_size, processor_config.patch_size),
+		       processor_config.pyramid_levels,
+		       TermCriteria(TermCriteria::COUNT+TermCriteria::EPS,
+				    processor_config.max_iteration,
+				    processor_config.track_precision));
+  for(int i=0;i<status.size();i++) {
+    if (status[i] == 0 && inliers[i] != 0) {
+      status_outlier[i] = 0;
+      //fprintf(stderr,"2\n");
+    }
+  }
+  status.clear();
+
+  // 3.curr1 --> curr0
+  calcOpticalFlowPyrLK(curr_cam1_pyramid_, curr_cam0_pyramid_,
+		       curr_cam1_points, curr_cam0_points,
+		       status, noArray(),
+		       Size(processor_config.patch_size, processor_config.patch_size),
+		       processor_config.pyramid_levels,
+		       TermCriteria(TermCriteria::COUNT+TermCriteria::EPS,
+				    processor_config.max_iteration,
+				    processor_config.track_precision));
+  for(int i=0;i<status.size();i++) {
+    if (status[i] == 0 && inliers[i] != 0) {
+      status_outlier[i] = 0;
+      //fprintf(stderr,"3\n");
+    }
+  }
+  status.clear();
+
+  // 4.curr0 --> prev0
+  calcOpticalFlowPyrLK(curr_cam0_pyramid_, prev_cam0_pyramid_,
+		       curr_pts0, prev_cam0_points,
+		       status, noArray(),
+		       Size(processor_config.patch_size, processor_config.patch_size),
+		       processor_config.pyramid_levels,
+		       TermCriteria(TermCriteria::COUNT+TermCriteria::EPS,
+				    processor_config.max_iteration,
+				    processor_config.track_precision));
+  for(int i=0;i<status.size();i++) {
+    if (status[i] == 0 && inliers[i] != 0) {
+      status_outlier[i] = 0;
+      //fprintf(stderr,"4\n");
+    }
+  }
+  status.clear();
+
+  // check
+  if(inliers.size() != status_outlier.size())
+    ROS_WARN("checkWithCircle:size invalid:%d %d",inliers.size(),status_outlier.size());
+  
+  for(int i=0;i<status_outlier.size();i++) {
+    if(status_outlier[i] == 0){
+      inliers[i] = 0;
+      outlier_points.push_back(curr_pts0[i]);
+      continue;
+    }
+
+    if( isNotSame(curr_cam0_points[i], curr_pts0[i]) ||
+	isNotSame(prev_cam0_points[i], prev_pts0[i])) {
+      inliers[i] = 0;
+      outlier_points.push_back(curr_pts0[i]);
+    }
+  }
+  //funtion end
 }
   
 } // end namespace msckf_vio

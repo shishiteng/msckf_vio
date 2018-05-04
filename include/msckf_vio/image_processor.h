@@ -71,7 +71,9 @@ private:
 
     int debug_tracking;
     int check_orb;
+    int check_circle;
     int check_stereo;
+    int check_ransac;
   };
 
   /*
@@ -340,6 +342,12 @@ private:
 		    std::vector<unsigned char> &inliers,
 		    std::vector<cv::Point2f> &outlier_points);
 
+  
+  void checkWithCircle(std::vector<cv::Point2f> prev_pts0,
+		       std::vector<cv::Point2f> curr_pts0,
+		       std::vector<unsigned char> &inliers,
+		       std::vector<cv::Point2f> &outlier_points);
+
   // Indicate if this is the first image message.
   bool is_first_img;
 
@@ -373,11 +381,13 @@ private:
 
   // Previous and current images
   cv_bridge::CvImageConstPtr cam0_prev_img_ptr;
+  cv_bridge::CvImageConstPtr cam1_prev_img_ptr;
   cv_bridge::CvImageConstPtr cam0_curr_img_ptr;
   cv_bridge::CvImageConstPtr cam1_curr_img_ptr;
 
   // Pyramids for previous and current image
   std::vector<cv::Mat> prev_cam0_pyramid_;
+  std::vector<cv::Mat> prev_cam1_pyramid_;
   std::vector<cv::Mat> curr_cam0_pyramid_;
   std::vector<cv::Mat> curr_cam1_pyramid_;
 
@@ -416,6 +426,7 @@ private:
 
   std::vector<cv::Point2f> orb_outliers;
   std::vector<cv::Point2f> stereo_outliers;
+  std::vector<cv::Point2f> circle_outliers;
 };
 
 typedef ImageProcessor::Ptr ImageProcessorPtr;
