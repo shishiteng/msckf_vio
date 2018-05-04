@@ -68,6 +68,10 @@ private:
     double track_precision;
     double ransac_threshold;
     double stereo_threshold;
+
+    int debug_tracking;
+    int check_orb;
+    int check_stereo;
   };
 
   /*

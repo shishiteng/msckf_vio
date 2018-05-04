@@ -23,6 +23,8 @@ using namespace std;
 using namespace cv;
 using namespace Eigen;
 
+int frame_count = 0;
+cv::Mat T_cam0_cam1;
 
 namespace msckf_vio {
 ImageProcessor::ImageProcessor(ros::NodeHandle& n) :
@@ -95,7 +97,9 @@ bool ImageProcessor::loadParameters() {
   R_cam0_imu = R_imu_cam0.t();
   t_cam0_imu = -R_imu_cam0.t() * t_imu_cam0;
 
-  cv::Mat T_cam0_cam1 = utils::getTransformCV(nh, "cam1/T_cn_cnm1");
+  //cv::Mat T_cam0_cam1 = utils::getTransformCV(nh, "cam1/T_cn_cnm1"); //2
+  T_cam0_cam1 = utils::getTransformCV(nh, "cam1/T_cn_cnm1"); //2
+  //fprintf(stderr,"2\n");
   cv::Mat T_imu_cam1 = T_cam0_cam1 * T_imu_cam0;
   cv::Matx33d R_imu_cam1(T_imu_cam1(cv::Rect(0,0,3,3)));
   cv::Vec3d   t_imu_cam1 = T_imu_cam1(cv::Rect(3,0,1,3));
@@ -123,6 +127,11 @@ bool ImageProcessor::loadParameters() {
       processor_config.ransac_threshold, 3);
   nh.param<double>("stereo_threshold",
       processor_config.stereo_threshold, 3);
+
+  //
+  nh.param<int>("debug_tracking",processor_config.debug_tracking, 0);
+  nh.param<int>("check_orb",processor_config.check_orb, 0);
+  nh.param<int>("check_stereo",processor_config.check_stereo, 0);
 
   ROS_INFO("===========================================");
   ROS_INFO("cam0_resolution: %d, %d",
@@ -172,6 +181,9 @@ bool ImageProcessor::loadParameters() {
       processor_config.ransac_threshold);
   ROS_INFO("stereo_threshold: %f",
       processor_config.stereo_threshold);
+  ROS_INFO("debug_tracking: %d",processor_config.debug_tracking);
+  ROS_INFO("check_orb: %d",processor_config.check_orb);
+  ROS_INFO("check_stereo: %d",processor_config.check_stereo);
   ROS_INFO("===========================================");
   return true;
 }
@@ -208,7 +220,7 @@ bool ImageProcessor::initialize() {
     return false;
   ROS_INFO("Finish creating ROS IO...");
 
-  const string calib_file = "/home/sst/catkin_ws/src/VINS-Mono-master/config/visensor_50t#3/fisheye_left.yaml";
+  const string calib_file = "/home/sst/catkin_ws2/src/VINS-Mono-Super/config/visensor_50t#3/fisheye_left.yaml";
   m_camera = camodocal::CameraFactory::instance()->generateCameraFromYamlFile(calib_file);
 
   return true;
@@ -462,9 +474,8 @@ void ImageProcessor::trackFeatures() {
   if (prev_ids.size() == 0) return;
 
   //debug模式，纯视觉的光流跟踪
-  int debug_tracking = 0;
   Mat draw_img;
-  if(debug_tracking) {
+  if(processor_config.debug_tracking) {
     cvtColor(cam0_prev_img_ptr->image,draw_img, CV_GRAY2RGB);
     
     ros::Time ss = ros::Time::now();
@@ -504,7 +515,7 @@ void ImageProcessor::trackFeatures() {
   ROS_DEBUG("trackFeatures | predictFeatureTracking : %f",(ros::Time::now()-start_time).toSec());
 
   //debug模式，gyro-aided klt预测结果
-  if(debug_tracking) {
+  if(processor_config.debug_tracking) {
     for(int i=0;i<prev_cam0_points.size();i++) {
       circle(draw_img, prev_cam0_points[i], 4, Scalar(0,255,255));
       line(draw_img, prev_cam0_points[i], curr_cam0_points[i], Scalar(255,0,0), 2);
@@ -526,12 +537,15 @@ void ImageProcessor::trackFeatures() {
   
   ROS_DEBUG("trackFeatures | gyro-aided calcOpticalFlowPyrLK : %f",(ros::Time::now()-start_time).toSec());
 
-  //fprintf(stderr,"qianhou\n");
-  checkWithORB(cam0_prev_img_ptr->image, cam0_curr_img_ptr->image,
-	       prev_cam0_points, curr_cam0_points,
-	       track_inliers,
-	       orb_outliers);
-  //printf("trackFeatures:orb outliers:%d\n",orb_outliers.size());
+  // 前后帧间跟踪只用orb剔除outlier
+  if(processor_config.check_orb) {
+    checkWithORB(cam0_prev_img_ptr->image, cam0_curr_img_ptr->image,
+		 prev_cam0_points, curr_cam0_points,
+		 track_inliers,
+		 orb_outliers);
+    //printf("trackFeatures:orb outliers:%d\n",orb_outliers.size());
+  }
+
 
   // Mark those tracked points out of the image region
   // as untracked.
@@ -545,7 +559,7 @@ void ImageProcessor::trackFeatures() {
   }
 
   // debug模式，gyro-aided klt最终结果
-  if(debug_tracking) {
+  if(processor_config.debug_tracking) {
     int nTrack = 0;
     for (int i = 0; i < curr_cam0_points.size(); ++i) {
       if (track_inliers[i] == 0)
@@ -585,7 +599,6 @@ void ImageProcessor::trackFeatures() {
 
   // Number of features left after tracking.
   after_tracking = curr_tracked_cam0_points.size();
-
 
   // Outlier removal involves three steps, which forms a close
   // loop between the previous and current frames of cam0 (left)
@@ -718,6 +731,7 @@ void ImageProcessor::stereoMatch(
   }
 
   // Track features using LK optical flow method.
+  // 1.用光流跟踪了左右帧点
   calcOpticalFlowPyrLK(curr_cam0_pyramid_, curr_cam1_pyramid_,
       cam0_points, cam1_points,
       inlier_markers, noArray(),
@@ -728,16 +742,19 @@ void ImageProcessor::stereoMatch(
                    processor_config.track_precision),
       cv::OPTFLOW_USE_INITIAL_FLOW);
 
-  //fprintf(stderr,"stereo\n");
-  
-  checkWithORB(cam0_curr_img_ptr->image, cam1_curr_img_ptr->image,
-	       cam0_points, cam1_points,
-	       inlier_markers,
-	       orb_outliers);
-  //printf("stereoMatch:orb outliers:%d\n",orb_outliers.size());
+  // 2.用orb剔除光流跟踪错的点
+  if(processor_config.check_orb) {
+    checkWithORB(cam0_curr_img_ptr->image, cam1_curr_img_ptr->image,
+		 cam0_points, cam1_points,
+		 inlier_markers,
+		 orb_outliers);
+  }
 
-  //check with stereo constraint
-  checkWithStereo(cam0_points,cam1_points,inlier_markers,stereo_outliers);
+
+  // 3.用左右目的一些约束进一步剔除outlier
+  if(processor_config.check_stereo)
+    checkWithStereo(cam0_points,cam1_points,inlier_markers,stereo_outliers);
+  
   
   // Mark those tracked points out of the image region
   // as untracked.
@@ -1366,60 +1383,57 @@ void ImageProcessor::publish() {
       curr_cam1_points, cam1_intrinsics, cam1_distortion_model,
       cam1_distortion_coeffs, curr_cam1_points_undistorted);
 
-  Eigen::Isometry3d T_cam0_cam1 = utils::getTransformEigen(nh, "cam1/T_cn_cnm1");
-  Eigen::Isometry3d T_cam1_cam0 = T_cam0_cam1.inverse();
+  if(processor_config.debug_tracking) {
+    int w = cam0_curr_img_ptr->image.cols;
+    int h = cam0_curr_img_ptr->image.rows;
+    float cx = (float)w/200.;
+    float cy = (float)h/200.;
   
-#if 0
-  cv::Mat show(960,1280,cam0_curr_img_ptr->image.type());
-  show.setTo(cv::Scalar(255,255,255));
-  cam0_curr_img_ptr->image.copyTo(show(cv::Rect(0,0,640,480)));
-  cam1_curr_img_ptr->image.copyTo(show(cv::Rect(640,0,640,480)));
-  cvtColor(show,show,CV_GRAY2RGB);
-  for (int i = 0; i < curr_ids.size(); ++i) {
-    Eigen::Vector3d vec(curr_cam0_points_undistorted[i].x,curr_cam0_points_undistorted[i].y,1);
-    Eigen::Vector3d vec_(curr_cam1_points_undistorted[i].x,curr_cam1_points_undistorted[i].y,1);
-    //Eigen::Vector3d vec1=T_cam1_cam0*curr_cam1_points_undistorted[i];
-    Eigen::Vector3d vec1=T_cam1_cam0.linear()*vec_;
-    cv::Point2f p0(vec[0]+3.2,vec[1]+2.4);
-    p0=p0*100+cv::Point2f(0,480);
-    cv::Point2f p1(vec1[0]/vec1[2]+3.2,vec1[1]/vec1[2]+2.4);
-    p1=p1*100+cv::Point2f(640,480);
+    cv::Mat show(2*h,2*w,cam0_curr_img_ptr->image.type());
+    show.setTo(cv::Scalar(255,255,255));
+    cam0_curr_img_ptr->image.copyTo(show(cv::Rect(0,0,w,h)));
+    cam1_curr_img_ptr->image.copyTo(show(cv::Rect(w,0,w,h)));
+    cvtColor(show,show,CV_GRAY2RGB);
 
-    if(p1.x-640 > p0.x) {
-      circle(show, p0, 3, Scalar(0,0,255));
-      circle(show, p1, 3, Scalar(0,0,255));
+    cv::Matx33d R_cam0_cam1(T_cam0_cam1(cv::Rect(0,0,3,3)));
+    cv::Vec3d   t_cam0_cam1 = T_cam0_cam1(cv::Rect(3,0,1,3));
+    cv::Matx33d R_cam1_cam0 = R_cam0_cam1.t();
+    cv::Vec3d t_cam1_cam0 = -R_cam0_cam1.t() * t_cam0_cam1;
+  
+    for (int i = 0; i < curr_cam0_points.size(); i++) {
+    cv::Vec3d vec(curr_cam0_points_undistorted[i].x,curr_cam0_points_undistorted[i].y,1);
+    cv::Vec3d vec_(curr_cam1_points_undistorted[i].x,curr_cam1_points_undistorted[i].y,1);
+    cv::Vec3d vec1=R_cam1_cam0*vec_;
+    cv::Point2f p0(vec[0]+cx,vec[1]+cy);
+    p0=p0*100+cv::Point2f(0,h);
+    cv::Point2f p1(vec1[0]/vec1[2]+cx,vec1[1]/vec1[2]+cy);
+    p1=p1*100+cv::Point2f(w,h);
+
+    Scalar color = Scalar(0,255,0);
+    int r = 3;
+    if(p1.x-w > p0.x) {
+      color = Scalar(0,0,255);
+      r = 5;
     }else if (fabs(p1.y-p0.y) > 2) {
-      circle(show, p0, 3, Scalar(255,0,0));
-      circle(show, p1, 3, Scalar(255,0,0));
-    }else {
-      circle(show, p0, 3, Scalar(0,255,0));
-      circle(show, p1, 3, Scalar(0,255,0));
+      color = Scalar(255,0,128);
+      r = 5;
     }
 
-    line(show, p0, p1-Point2f(640,0), Scalar(0,255,0), 1);
+    circle(show, p0, r, color, -1); //x
+    circle(show, p1, r, color, -1);
+    line(show, p0, p1-Point2f(w,0), Scalar(0,255,0), 1);
   }
 
-  imshow("show",show);
-  waitKey(1);
-    
-#endif
+    imshow("show",show);
+    waitKey(1);
+  }
+
   
+
+
   int n =0;
   for (int i = 0; i < curr_ids.size(); ++i) {
     feature_msg_ptr->features.push_back(FeatureMeasurement());
-    
-#if 0
-    Eigen::Vector3d vec(curr_cam0_points_undistorted[i].x,curr_cam0_points_undistorted[i].y,1);
-    Eigen::Vector3d vec_(curr_cam1_points_undistorted[i].x,curr_cam1_points_undistorted[i].y,1);
-    //Eigen::Vector3d vec1=T_cam1_cam0*curr_cam1_points_undistorted[i];
-    Eigen::Vector3d vec1=T_cam1_cam0.linear()*vec_;
-    cv::Point2f p0(vec[0]+3.2,vec[1]+2.4);
-    p0=p0*100+cv::Point2f(0,480);
-    cv::Point2f p1(vec1[0]/vec1[2]+3.2,vec1[1]/vec1[2]+2.4);
-    p1=p1*100+cv::Point2f(640,480);
-    if(p1.x-640 > p0.x || fabs(p1.y-p0.y) > 2)
-      continue;
-#endif
     
     feature_msg_ptr->features[i].id = curr_ids[i];
     feature_msg_ptr->features[i].u0 = curr_cam0_points_undistorted[i].x;
@@ -1472,7 +1486,8 @@ void ImageProcessor::publish() {
   feature_points->channels.push_back(id_of_point);
   feature_points->channels.push_back(u_of_point);
   feature_points->channels.push_back(v_of_point);
-  feature2_pub.publish(feature_points);
+  if(frame_count++ % 3 == 0)
+    feature2_pub.publish(feature_points);
 
   return;
 }
@@ -1726,21 +1741,30 @@ void ImageProcessor::checkWithStereo(std::vector<cv::Point2f> cam0_points,
   undistortPoints(cam1_points, cam1_intrinsics, cam1_distortion_model,
 		  cam1_distortion_coeffs, cam1_points_undistorted);
 
-  Eigen::Isometry3d T_cam0_cam1 = utils::getTransformEigen(nh, "cam1/T_cn_cnm1");
-  Eigen::Isometry3d T_cam1_cam0 = T_cam0_cam1.inverse();
+  //Eigen::Isometry3d T_cam0_cam1 = utils::getTransformEigen(nh, "cam1/T_cn_cnm1"); //1
+  //fprintf(stderr,"1\n");
+  cv::Matx33d R_cam0_cam1(T_cam0_cam1(cv::Rect(0,0,3,3)));
+  cv::Vec3d   t_cam0_cam1 = T_cam0_cam1(cv::Rect(3,0,1,3));
+  cv::Matx33d R_cam1_cam0 = R_cam0_cam1.t();
+  cv::Vec3d t_cam1_cam0 = -R_cam0_cam1.t() * t_cam0_cam1;
 
+  float w = cam0_curr_img_ptr->image.cols;
+  float h = cam0_curr_img_ptr->image.rows;
+  float cx = w/200.;
+  float cy = h/200.;
   for (int i = 0; i < cam0_points.size(); ++i) {
     if(inliers[i] == 0)
       continue;
 	
-    Eigen::Vector3d vec(cam0_points_undistorted[i].x,cam0_points_undistorted[i].y,1);
-    Eigen::Vector3d vec_(cam1_points_undistorted[i].x,cam1_points_undistorted[i].y,1);
-    Eigen::Vector3d vec1=T_cam1_cam0.linear()*vec_;
-    cv::Point2f p0(vec[0]+3.2,vec[1]+2.4);
-    p0=p0*100+cv::Point2f(0,480);
-    cv::Point2f p1(vec1[0]/vec1[2]+3.2,vec1[1]/vec1[2]+2.4);
-    p1=p1*100+cv::Point2f(640,480);
-    if(p1.x-640 > p0.x || fabs(p1.y-p0.y) > 2) {
+    cv::Vec3d vec(cam0_points_undistorted[i].x,cam0_points_undistorted[i].y,1);
+    cv::Vec3d vec_(cam1_points_undistorted[i].x,cam1_points_undistorted[i].y,1);
+    cv::Vec3d vec1 = R_cam1_cam0*vec_;
+    cv::Point2f p0(vec[0]+cx,vec[1]+cy);
+    p0 = p0*100+cv::Point2f(0,h);
+    cv::Point2f p1(vec1[0]/vec1[2]+cx,vec1[1]/vec1[2]+cy);
+    p1 = p1*100+cv::Point2f(w,h);
+    
+    if(p1.x-w > p0.x || fabs(p1.y-p0.y) > 2) {
       inliers[i] = 0;
       outlier_points.push_back(cam0_points[i]);
     } else {

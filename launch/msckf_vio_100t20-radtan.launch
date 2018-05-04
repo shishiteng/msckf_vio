@@ -38,7 +38,8 @@
       <param name="noise/acc" value="0.04"/>
       <param name="noise/gyro_bias" value="2e-5"/>
       <param name="noise/acc_bias" value="0.001"/>
-      <param name="noise/feature" value="0.035"/>
+      <!--param name="noise/feature" value="0.035"/-->
+      <param name="noise/feature" value="0.0035"/>
 
       <param name="initial_state/velocity/x" value="0.0"/>
       <param name="initial_state/velocity/y" value="0.0"/>

@@ -219,7 +219,7 @@ bool MsckfVio::createRosIO() {
 bool MsckfVio::initialize() {
   if (!loadParameters()) return false;
   ROS_INFO("Finish loading ROS parameters...");
-
+  
   //ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Debug);
   ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info);
   
@@ -1710,7 +1710,7 @@ void MsckfVio::publish(const ros::Time& time) {
   path.poses.push_back(pose_stamped);
   path_pub.publish(path);
 
-    ROS_INFO("position:(%f, %f, %f)  distance:%.1f\n",odom_msg.pose.pose.position.x,odom_msg.pose.pose.position.y,odom_msg.pose.pose.position.z,calcPathDistance(path));
+    ROS_INFO("position:(%f, %f, %f)  distance:%.1f",odom_msg.pose.pose.position.x,odom_msg.pose.pose.position.y,odom_msg.pose.pose.position.z,calcPathDistance(path));
 
     
   // Publish the 3D positions of the features that has been initialized.
