@@ -91,6 +91,9 @@ bool ImageProcessor::loadParameters() {
   cam1_distortion_coeffs[2] = cam1_distortion_coeffs_temp[2];
   cam1_distortion_coeffs[3] = cam1_distortion_coeffs_temp[3];
 
+  //timeshift: t_imu=t_cam+timeshift
+  nh.param<double>("cam0/timeshift_cam_imu", processor_config.timeshift, 0);
+
   cv::Mat     T_imu_cam0 = utils::getTransformCV(nh, "cam0/T_cam_imu");
   cv::Matx33d R_imu_cam0(T_imu_cam0(cv::Rect(0,0,3,3)));
   cv::Vec3d   t_imu_cam0 = T_imu_cam0(cv::Rect(3,0,1,3));
@@ -158,6 +161,7 @@ bool ImageProcessor::loadParameters() {
       cam1_distortion_coeffs[0], cam1_distortion_coeffs[1],
       cam1_distortion_coeffs[2], cam1_distortion_coeffs[3]);
 
+  ROS_INFO("timeshift: %f",processor_config.timeshift);
   cout << R_imu_cam0 << endl;
   cout << t_imu_cam0.t() << endl;
 
@@ -242,9 +246,25 @@ void ImageProcessor::stereoCallback(const sensor_msgs::ImageConstPtr& cam0_img,c
   stereo_outliers.clear();
   circle_outliers.clear();
 
+#if 1
+  // 补偿时间戳，把图像时间转到imu时间系下
+  // t_imu = t_cam + timeshift
+  ros::Duration offset(processor_config.timeshift);
+  sensor_msgs::Image img0,img1;
+  img0 = *cam0_img;
+  img1 = *cam1_img;
+  img0.header.stamp = cam0_img->header.stamp + offset;
+  img1.header.stamp = cam1_img->header.stamp + offset;
+
+  cam0_curr_img_ptr = cv_bridge::toCvCopy(img0, sensor_msgs::image_encodings::MONO8);
+  cam1_curr_img_ptr = cv_bridge::toCvCopy(img1, sensor_msgs::image_encodings::MONO8);
+
+  //fprintf(stderr,"image:%lf\n",img0.header.stamp.toSec());
+#else
   // Get the current image.
   cam0_curr_img_ptr = cv_bridge::toCvShare(cam0_img, sensor_msgs::image_encodings::MONO8);
   cam1_curr_img_ptr = cv_bridge::toCvShare(cam1_img, sensor_msgs::image_encodings::MONO8);
+#endif
 
   // Build the image pyramids once since they're used at multiple places
   createImagePyramids();
@@ -1389,7 +1409,6 @@ void ImageProcessor::twoPointRansac(
 }
 
 void ImageProcessor::publish() {
-
   // Publish features.
   CameraMeasurementPtr feature_msg_ptr(new CameraMeasurement);
   feature_msg_ptr->header.stamp = cam0_curr_img_ptr->header.stamp;
@@ -1807,7 +1826,7 @@ void ImageProcessor::checkWithStereo(std::vector<cv::Point2f> cam0_points,
     cv::Point2f p1(vec1[0]/vec1[2]+cx,vec1[1]/vec1[2]+cy);
     p1 = p1*100+cv::Point2f(w,h);
     
-    if(p1.x-w > p0.x || fabs(p1.y-p0.y) > 2) {
+    if( (p1.x-w) > p0.x || fabsf(p1.y-p0.y) > 1) {
       inliers[i] = 0;
       outlier_points.push_back(cam0_points[i]);
     } else {
@@ -1877,7 +1896,7 @@ void ImageProcessor::checkWithORB(Mat image0,
 
 bool isNotSame(cv::Point2f p1, cv::Point2f p2)
 {
-  return(fabsf(p1.x-p2.x)>0.3 || fabsf(p1.y-p2.y)>0.3);
+  return(fabsf(p1.x-p2.x)>0.1 || fabsf(p1.y-p2.y)>0.1);
 }
   
 void ImageProcessor::checkWithCircle(vector<Point2f> prev_pts0,

@@ -74,6 +74,8 @@ private:
     int check_circle;
     int check_stereo;
     int check_ransac;
+    
+    double timeshift;
   };
 
   /*
