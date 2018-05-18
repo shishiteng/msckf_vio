@@ -547,8 +547,7 @@ void MsckfVio::batchImuProcessing(const double& time_bound) {
   // Counter how many IMU msgs in the buffer are used.
   int used_imu_msg_cntr = 0;
 
-  //printf("imu_state time:%.9f\n",state_server.imu_state.time);
-  //printf("image time:%.9f\n",time_bound);
+  
   
   bool finish_flag = false;
   for (const auto& imu_msg : imu_msg_buffer) {
@@ -591,6 +590,8 @@ void MsckfVio::batchImuProcessing(const double& time_bound) {
       break;
   }
 
+  //printf("image time:%.9f\n",time_bound);
+
   // Set the state ID for the new IMU state.
   state_server.imu_state.id = IMUState::next_id++;
 
@@ -599,8 +600,8 @@ void MsckfVio::batchImuProcessing(const double& time_bound) {
       imu_msg_buffer.begin()+used_imu_msg_cntr);
 #else
   int used_imu_msg_cntr = 0;
-  //printf("image time:%.9f\n",state_server.imu_state.time);
-  printf("image time:%.9f\n",time_bound);
+
+  
 
   
   for (const auto& imu_msg : imu_msg_buffer) {
@@ -609,9 +610,9 @@ void MsckfVio::batchImuProcessing(const double& time_bound) {
       ++used_imu_msg_cntr;
       continue;
     }
-    if (imu_time > time_bound) break;
+    if (imu_time > time_bound+0.001) break;
 
-    printf("  imu time:%.9f\n",imu_time);
+    //printf("  imu time:%.9f\n",imu_time);
     
     // Convert the msgs.
     Vector3d m_gyro, m_acc;
@@ -623,13 +624,15 @@ void MsckfVio::batchImuProcessing(const double& time_bound) {
     mean_gyro = (m_gyro + last_gyro)/2.;
     mean_acc  = (m_acc  + last_acc)/2.;
     
-    //processModel(imu_time, m_gyro, m_acc);
-    processModel(imu_time, mean_gyro, mean_acc);
+    processModel(imu_time, m_gyro, m_acc);
+    //processModel(imu_time, mean_gyro, mean_acc);
     ++used_imu_msg_cntr;
     
     last_gyro = m_gyro;
     last_acc  = m_acc;
   }
+
+  //printf("image time:%.9f\n",time_bound);
 
   // Set the state ID for the new IMU state.
   state_server.imu_state.id = IMUState::next_id++;
@@ -1710,7 +1713,7 @@ void MsckfVio::publish(const ros::Time& time) {
   path.poses.push_back(pose_stamped);
   path_pub.publish(path);
 
-    ROS_INFO("position:(%f, %f, %f)  distance:%.1f",odom_msg.pose.pose.position.x,odom_msg.pose.pose.position.y,odom_msg.pose.pose.position.z,calcPathDistance(path));
+    ROS_INFO("[%f] position:(%.3f, %.3f, %.3f)  distance:%.1f",time.toSec(), odom_msg.pose.pose.position.x,odom_msg.pose.pose.position.y,odom_msg.pose.pose.position.z,calcPathDistance(path));
 
     
   // Publish the 3D positions of the features that has been initialized.

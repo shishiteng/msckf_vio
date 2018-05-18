@@ -1,0 +1,12 @@
+<launch>
+
+  <!-- Image Processor Nodelet  -->
+   <include file="$(find msckf_vio)/launch/image_processor_100t14-160.launch"/>
+
+
+   <include file="$(find msckf_vio)/launch/msckf_vio_100t14-160.launch"/>
+
+   <include file="$(find msckf_vio)/launch/msckf_vio_100t14-9250.launch"/>
+
+
+</launch>
