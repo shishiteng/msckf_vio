@@ -601,9 +601,7 @@ void MsckfVio::batchImuProcessing(const double& time_bound) {
 #else
   int used_imu_msg_cntr = 0;
 
-  
-
-  
+    
   for (const auto& imu_msg : imu_msg_buffer) {
     double imu_time = imu_msg.header.stamp.toSec();
     if (imu_time < state_server.imu_state.time) {

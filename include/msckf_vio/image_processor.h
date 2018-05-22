@@ -424,7 +424,7 @@ private:
   void updateFeatureLifetime();
   void featureLifetimeStatistics();
 
-  camodocal::CameraPtr m_camera;
+  camodocal::CameraPtr m_camera[2];
 
   std::vector<cv::Point2f> orb_outliers;
   std::vector<cv::Point2f> stereo_outliers;

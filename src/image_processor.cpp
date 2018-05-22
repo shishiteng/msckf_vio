@@ -228,8 +228,10 @@ bool ImageProcessor::initialize() {
     return false;
   ROS_INFO("Finish creating ROS IO...");
 
-  const string calib_file = "/home/sst/catkin_ws2/src/VINS-Mono-Super/config/visensor_50t#3/fisheye_left.yaml";
-  m_camera = camodocal::CameraFactory::instance()->generateCameraFromYamlFile(calib_file);
+  const string calib_file0 = "/home/sst/catkin_ws2/src/VINS-Mono-Super/config/visensor_100t#14/visensor_100t#14.yaml";
+  const string calib_file1 = "/home/sst/catkin_ws2/src/VINS-Mono-Super/config/visensor_100t#14/right.yaml";
+  m_camera[0] = camodocal::CameraFactory::instance()->generateCameraFromYamlFile(calib_file0);
+  m_camera[1] = camodocal::CameraFactory::instance()->generateCameraFromYamlFile(calib_file1);
 
   return true;
 }
@@ -1526,8 +1528,8 @@ void ImageProcessor::publish() {
 
     Eigen::Vector2d a(curr_cam0_points[i].x, curr_cam0_points[i].y);
     Eigen::Vector3d b;
-    m_camera->liftProjective(a, b);
-	
+    m_camera[0]->liftProjective(a, b);
+
     geometry_msgs::Point32 p;
     p.x = b.x() / b.z();
     p.y = b.y() / b.z();
@@ -1537,11 +1539,26 @@ void ImageProcessor::publish() {
     id_of_point.values.push_back(id);
     u_of_point.values.push_back(curr_cam0_points[i].x);
     v_of_point.values.push_back(curr_cam0_points[i].y);
+
+    // right camera
+    Eigen::Vector2d a1(curr_cam1_points[i].x, curr_cam1_points[i].y);
+    Eigen::Vector3d b1;
+    m_camera[1]->liftProjective(a1, b1);
+    
+    geometry_msgs::Point32 p1;
+    p1.x = b1.x() / b1.z();
+    p1.y = b1.y() / b1.z();
+    p1.z = 1;
+
+    feature_points->points.push_back(p1);
+    id_of_point.values.push_back(id);
+    u_of_point.values.push_back(curr_cam1_points[i].x);
+    v_of_point.values.push_back(curr_cam1_points[i].y);
   }
   feature_points->channels.push_back(id_of_point);
   feature_points->channels.push_back(u_of_point);
   feature_points->channels.push_back(v_of_point);
-  if(frame_count++ % 3 == 0)
+  if(frame_count++ % 2 == 0)
     feature2_pub.publish(feature_points);
 
   return;
